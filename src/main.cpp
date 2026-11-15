@@ -112,7 +112,7 @@ void loop()
   static bool fetchDue = true;
   static bool lastFetchOk = false;
   static uint32_t settingsVer = settingsVersion();
-  static int lastMinute = -1;
+  static int lastTick = -1;  // second (CLOCK_SECONDS) or minute of the last header redraw
   static int lastKey = -1;
   static IPAddress shownIp;
   static uint32_t radioVer = 0;
@@ -207,7 +207,7 @@ void loop()
   localtime_r(&t, &lt);
   if (full) {
     ui.render(weather, t, timeValid());
-    lastMinute = lt.tm_min;
+    lastTick = CLOCK_SECONDS ? lt.tm_sec : lt.tm_min;
     lastKey = FORECAST_HOURLY ? lt.tm_hour : lt.tm_yday;
     radioLayoutChanged = false;
   } else if (radioLayoutChanged) {
@@ -216,8 +216,8 @@ void loop()
   } else if (radioTitleChanged) {
     ui.renderNowPlaying();
   }
-  if (!full && lt.tm_min != lastMinute) {
-    lastMinute = lt.tm_min;
+  if (!full && (CLOCK_SECONDS ? lt.tm_sec : lt.tm_min) != lastTick) {
+    lastTick = CLOCK_SECONDS ? lt.tm_sec : lt.tm_min;
     ui.renderHeader(weather, t, timeValid());
     // New day or new hour: labels ("Today", "Now") change
     const int key = FORECAST_HOURLY ? lt.tm_hour : lt.tm_yday;
@@ -229,5 +229,13 @@ void loop()
 
   // Long song titles scroll: faster loop for smooth movement (~30 px/s)
   const bool scrolling = ui.animateNowPlaying(millis());
-  delay(scrolling ? 20 : 50);
+  uint32_t wait = scrolling ? 20 : 50;
+#if CLOCK_SECONDS
+  // Wake just after the next full second, so the seconds tick evenly
+  timeval tv;
+  gettimeofday(&tv, nullptr);
+  const uint32_t toNextSecond = 1000 - tv.tv_usec / 1000 + 2;
+  if (toNextSecond < wait) wait = toNextSecond;
+#endif
+  delay(wait);
 }

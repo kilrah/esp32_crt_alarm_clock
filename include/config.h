@@ -44,6 +44,9 @@
 #ifndef CLOCK_24H
 #define CLOCK_24H             1     // 0 = 12h clock with AM/PM
 #endif
+#ifndef CLOCK_SECONDS
+#define CLOCK_SECONDS         1     // Seconds after the time, in the temperature's font size
+#endif
 
 // --- Display content ---------------------------------------------------------
 #ifndef FORECAST_HOURLY

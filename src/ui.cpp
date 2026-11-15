@@ -242,6 +242,11 @@ void WeatherUi::drawHeader(LovyanGFX* g, int ox, int oy, const WeatherData& w, t
     snprintf(timeStr, sizeof(timeStr), "%d:%02d", h12 == 0 ? 12 : h12, lt.tm_min);
     strcpy(ampm, lt.tm_hour < 12 ? "AM" : "PM");
   }
+  char secStr[4] = "";
+#if CLOCK_SECONDS
+  if (timeValid) snprintf(secStr, sizeof(secStr), "%02d", lt.tm_sec);
+  else strcpy(secStr, "--");
+#endif
   char date[40] = "";
   if (timeValid) formatDate(date, sizeof(date), lt, true);
 
@@ -265,28 +270,55 @@ void WeatherUi::drawHeader(LovyanGFX* g, int ox, int oy, const WeatherData& w, t
 
   g->setFont(&fontMedium);
   const int tempW = g->textWidth(temp);
+  const int secW = secStr[0] ? g->textWidth("00") + 4 : 0;  // fixed width: no jitter
   g->setFont(&fontSmall);
   const int ampmW = ampm[0] ? g->textWidth(ampm) + 3 : 0;
   const int condW = g->textWidth(cond);
   const int humW = hum[0] ? 8 + dropS + 1 + g->textWidth(hum) : 0;
 
-  // Biggest clock that still leaves room for the text column. Measured with a
-  // fixed reference string so the size never changes from minute to minute.
+  // Column right of HH:MM: AM/PM at the top, seconds at the bottom. Stacked when the
+  // clock is tall enough, otherwise side by side.
+  auto stacked = [&](const ClockFont& f) { return f.cap >= CAP_SMALL + 4 + CAP_MEDIUM; };
+  auto sideWidth = [&](const ClockFont& f) {
+    if (ampmW && secW && !stacked(f)) return ampmW + secW + 6;  // "PM 00"
+    return ampmW > secW ? ampmW : secW;
+  };
+
+  // Two layouts, picked from fixed reference sizes (so nothing jumps from minute to minute
+  // or when the weather changes):
+  //  A: left column (condition, temperature, humidity) next to the clock + date, both
+  //     centered vertically. Needs minTextW next to the clock.
+  //  B: condition on its own line across the full width, the clock moved down below it;
+  //     temperature on the clock's baseline, humidity next to it or on the date's line.
+  //     Only the temperature has to fit next to the clock, so a bigger clock fits.
+  // Biggest clock wins; per size A is preferred (the classic look).
+  const int fullTextW = W - (tx - ox);
+  const int condGap = 8;  // condition baseline -> top of the clock digits (layout B)
+  g->setFont(&fontMedium);
+  const int tempRefW = g->textWidth(SHOW_DECIMAL ? "-88.8\xC2\xB0" "C" : "-88\xC2\xB0" "C");
   const int minTextW = ampm[0] ? 56 : 90;
   const int nFonts = sizeof(CLOCK_FONTS) / sizeof(CLOCK_FONTS[0]);
   const ClockFont* cf = &CLOCK_FONTS[nFonts - 1];
+  bool layoutB = false;
   for (auto& f : CLOCK_FONTS) {
     g->setFont(f.font);
-    int cw = g->textWidth("00:00") + ampmW;
-    if (f.cap + gapV + CAP_SMALL + 4 <= H && W - cw - 10 - (tx - ox) >= minTextW) { cf = &f; break; }
+    const int cw = g->textWidth("00:00") + sideWidth(f);
+    const int besideW = fullTextW - cw - 10;
+    if (f.cap + gapV + CAP_SMALL + 4 <= H && besideW >= minTextW) { cf = &f; break; }
+    if (CAP_SMALL + condGap + f.cap + gapV + CAP_SMALL + 2 <= H && besideW >= tempRefW) {
+      cf = &f;
+      layoutB = true;
+      break;
+    }
   }
+  const int sideW = sideWidth(*cf);
   g->setFont(cf->font);
-  const int clockW = g->textWidth(timeStr) + ampmW;
-  int textW = W - clockW - 10 - (tx - ox);
+  const int clockW = g->textWidth(timeStr) + sideW;
+  int textW = layoutB ? fullTextW : W - clockW - 10 - (tx - ox);
 
   // Condition on one line, or wrapped onto two (split at the last fitting space)
   bool wrap = false;
-  if (condW > textW) {
+  if (condW > textW && !layoutB) {
     g->setFont(&fontSmall);
     const char* best = nullptr;
     for (const char* p = strchr(cond, ' '); p; p = strchr(p + 1, ' ')) {
@@ -301,29 +333,42 @@ void WeatherUi::drawHeader(LovyanGFX* g, int ox, int oy, const WeatherData& w, t
     }
   }
 
-  // Long date if it is not wider than the clock (or the available room)
+  // Long date if it is not wider than the clock (or, in layout A, the available room)
   g->setFont(&fontSmall);
   int dateW = g->textWidth(date);
-  if (dateW > clockW && dateW > W - (tx - ox) - textW - 10) {
+  if (dateW > clockW && (layoutB || dateW > W - (tx - ox) - textW - 10)) {
     strcpy(date, dateShort);
     dateW = g->textWidth(date);
   }
   const int rightW = clockW > dateW ? clockW : dateW;
-  if (rightW > clockW) textW = W - rightW - 10 - (tx - ox);
+  if (!layoutB && rightW > clockW) textW = W - rightW - 10 - (tx - ox);
 
-  const int blockH = cf->cap + gapV + CAP_SMALL;
-  const int clockBase = oy + (H - blockH) / 2 + cf->cap;
+  int clockBase, condBase;
+  if (layoutB) {
+    const int blockH = CAP_SMALL + condGap + cf->cap + gapV + CAP_SMALL + 2;
+    condBase = oy + (H - blockH) / 2 + CAP_SMALL;
+    clockBase = condBase + condGap + cf->cap;
+  } else {
+    const int blockH = cf->cap + gapV + CAP_SMALL;
+    clockBase = oy + (H - blockH) / 2 + cf->cap;
+    condBase = 0;  // set below
+  }
   const int dateBase = clockBase + gapV + CAP_SMALL + 2;
   const int right = ox + W;
 
   g->setFont(cf->font);
   g->setTextColor(C_TEXT);
   g->setTextDatum(textdatum_t::baseline_right);
-  g->drawString(timeStr, right - ampmW, clockBase);
+  g->drawString(timeStr, right - sideW, clockBase);
+  g->setTextDatum(textdatum_t::baseline_left);
   if (ampm[0]) {
     g->setFont(&fontSmall);
-    g->setTextDatum(textdatum_t::baseline_left);
-    g->drawString(ampm, right - ampmW + 3, clockBase - cf->cap + CAP_SMALL);
+    g->drawString(ampm, right - sideW + 3, clockBase - cf->cap + CAP_SMALL);
+  }
+  if (secStr[0]) {
+    g->setFont(&fontMedium);
+    const int sx = (ampmW && !stacked(*cf)) ? right - secW + 4 : right - sideW + 4;
+    g->drawString(secStr, sx, clockBase);
   }
   g->setFont(&fontSmall);
   g->setTextColor(C_DIM);
@@ -338,23 +383,34 @@ void WeatherUi::drawHeader(LovyanGFX* g, int ox, int oy, const WeatherData& w, t
   else drawWeatherIcon(g, ox, iconY, iconS, "exceptional", false, C_BG);
 
   const int lineGap = 5;
-  int leftBlockH = CAP_SMALL + 12 + CAP_MEDIUM + (wrap ? CAP_SMALL + lineGap : 0);
-  // Humidity next to the temperature, or on its own line below if there's room
-  const bool humInline = hum[0] && tempW + humW <= textW;
-  const bool humLine = hum[0] && !humInline && leftBlockH + 8 + CAP_SMALL <= H - 6;
-  if (humLine) leftBlockH += 8 + CAP_SMALL;
-  int condBase = oy + (H - leftBlockH) / 2 + CAP_SMALL;
+  int tempBase;
+  bool humInline, humLine;
+  int humLineBase;
+  if (layoutB) {
+    // Temperature on the clock's baseline; humidity next to it or on the date's line
+    tempBase = clockBase;
+    humInline = hum[0] && tempW + humW <= fullTextW - clockW - 10;
+    humLine = hum[0] && !humInline && humW - 8 <= fullTextW - dateW - 10;
+    humLineBase = dateBase;
+  } else {
+    int leftBlockH = CAP_SMALL + 12 + CAP_MEDIUM + (wrap ? CAP_SMALL + lineGap : 0);
+    // Humidity next to the temperature, or on its own line below if there's room
+    humInline = hum[0] && tempW + humW <= textW;
+    humLine = hum[0] && !humInline && leftBlockH + 8 + CAP_SMALL <= H - 6;
+    if (humLine) leftBlockH += 8 + CAP_SMALL;
+    condBase = oy + (H - leftBlockH) / 2 + CAP_SMALL;
+    tempBase = condBase + (wrap ? CAP_SMALL + lineGap : 0) + 12 + CAP_MEDIUM;
+    humLineBase = tempBase + 8 + CAP_SMALL;
+  }
 
   g->setFont(&fontSmall);
   g->setTextColor(C_DIM);
   fitText(g, cond, textW);
   g->drawString(cond, tx, condBase);
   if (wrap) {
-    condBase += CAP_SMALL + lineGap;
     fitText(g, cond2, textW);
-    g->drawString(cond2, tx, condBase);
+    g->drawString(cond2, tx, condBase + CAP_SMALL + lineGap);
   }
-  const int tempBase = condBase + 12 + CAP_MEDIUM;
 
   g->setFont(&fontMedium);
   g->setTextColor(stale ? C_DIM : C_TEXT);
@@ -362,7 +418,7 @@ void WeatherUi::drawHeader(LovyanGFX* g, int ox, int oy, const WeatherData& w, t
 
   if (humInline || humLine) {
     const int hx = humInline ? x + 8 : tx;
-    const int hBase = humInline ? tempBase : tempBase + 8 + CAP_SMALL;
+    const int hBase = humInline ? tempBase : humLineBase;
     g->setFont(&fontSmall);
     drawDropIcon(g, hx, hBase - dropS + 1, dropS, C_HUMID);
     g->setTextColor(C_DIM);
