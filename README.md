@@ -118,7 +118,8 @@ network every 2 minutes and closes the access point once it succeeds.
 ## Web radio
 The radio section on the settings page has buttons for the stations, Stop, a volume slider
 and the current title. Stations are edited on *Edit stations* (8 slots). That page also has an *At startup* option that starts a chosen station automatically after boot, once WiFi is up and the first weather update is done. While the radio
-plays, the TV shows the station and title at the bottom, with one forecast row fewer.
+plays, the TV shows the station and title at the bottom, with one forecast row fewer. A title that
+doesn't fit scrolls, pausing for 2 s at the start of each pass.
 
 ![Radio playing](images/preview_radio.png)
 

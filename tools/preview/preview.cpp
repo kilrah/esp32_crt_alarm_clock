@@ -97,6 +97,11 @@ int main(int argc, char** argv)
     ui.render(w, now, true);
     snprintf(path, sizeof(path), "%s/screen_radio.ppm", outDir);
     writePpm(screen, path, 3);
+    // The same title scrolled for 6 s (2 s pause + 4 s at 30 px/s)
+    ui.animateNowPlaying(0);
+    ui.animateNowPlaying(6000);
+    snprintf(path, sizeof(path), "%s/screen_radio_scroll.ppm", outDir);
+    writePpm(screen, path, 3);
     ui.setNowPlaying("", "");
   }
   // 2) Summer, night, stale data

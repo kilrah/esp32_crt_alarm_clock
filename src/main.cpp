@@ -227,5 +227,7 @@ void loop()
     }
   }
 
-  delay(50);
+  // Long song titles scroll: faster loop for smooth movement (~30 px/s)
+  const bool scrolling = ui.animateNowPlaying(millis());
+  delay(scrolling ? 20 : 50);
 }

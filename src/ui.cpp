@@ -604,7 +604,8 @@ void WeatherUi::drawNowPlaying(LovyanGFX* g, int ox, int oy)
   const int base = oy + (H + CAP_SMALL) / 2 + 1;
   drawSpeakerIcon(g, ox, base - iconS + 1, iconS, C_HUMID);
 
-  // "Station · Title": station in white, title dimmed, shortened to fit
+  // "Station · Title": station in white (shortened to fit), title dimmed; a title that
+  // doesn't fit scrolls (animateNowPlaying)
   g->setFont(&fontSmall);
   g->setTextDatum(textdatum_t::baseline_left);
   int x = ox + iconS + 6;
@@ -614,17 +615,59 @@ void WeatherUi::drawNowPlaying(LovyanGFX* g, int ox, int oy)
   fitText(g, name, right - x);
   g->setTextColor(C_TEXT);
   x += g->drawString(name, x, base);
+  _titleW = 0;
   if (_nowTitle[0] && right - x > 40) {
-    char title[112];
-    snprintf(title, sizeof(title), " \xC2\xB7 %s", _nowTitle);  // " · title"
-    fitText(g, title, right - x);
     g->setTextColor(C_DIM);
-    g->drawString(title, x, base);
+    x += g->drawString(" \xC2\xB7 ", x, base);  // " · "
+    const int areaW = right - x;
+    const int tw = g->textWidth(_nowTitle);
+    if (tw <= areaW) {
+      g->drawString(_nowTitle, x, base);
+    } else {
+      _titleW = tw;
+      int cx, cy, cw, ch;
+      g->getClipRect(&cx, &cy, &cw, &ch);
+      g->setClipRect(x, oy, areaW, H);
+      const int tx = x - _scrollX;
+      g->drawString(_nowTitle, tx, base);
+      if (tx + tw < right) g->drawString(_nowTitle, tx + tw + SCROLL_GAP, base);  // next repeat
+      g->setClipRect(cx, cy, cw, ch);
+    }
   }
+}
+
+bool WeatherUi::animateNowPlaying(uint32_t ms)
+{
+  if (!_nowPlaying[0] || !_titleW) {
+    _scrollRestart = true;
+    return false;
+  }
+  if (_scrollRestart) {
+    _scrollRestart = false;
+    _scrollT0 = ms;
+  }
+  int pos = 0;
+  const uint32_t t = ms - _scrollT0;
+  if (t > SCROLL_PAUSE_MS) {
+    pos = (int)((t - SCROLL_PAUSE_MS) * SCROLL_PX_PER_S / 1000);
+    if (pos >= _titleW + SCROLL_GAP) {  // the repeat is now where the title started: pause
+      pos = 0;
+      _scrollT0 = ms;
+    }
+  }
+  if (pos != _scrollX) {
+    _scrollX = pos;
+    renderNowPlaying();
+  }
+  return true;
 }
 
 void WeatherUi::setNowPlaying(const char* station, const char* title)
 {
+  if (strcmp(title ? title : "", _nowTitle) != 0 || strcmp(station ? station : "", _nowPlaying) != 0) {
+    _scrollX = 0;  // new title: start from the beginning
+    _scrollRestart = true;
+  }
   snprintf(_nowPlaying, sizeof(_nowPlaying), "%s", station ? station : "");
   snprintf(_nowTitle, sizeof(_nowTitle), "%s", title ? title : "");
 }

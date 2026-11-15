@@ -24,6 +24,10 @@ class WeatherUi {
   void setNowPlaying(const char* station, const char* title);
   bool nowPlayingShown() const { return _nowPlaying[0] != 0; }
   void renderNowPlaying();
+  // Scrolls a title that is too long for the line (the station name stays put). Call
+  // often (every ~20 ms) with a millisecond clock while the radio line is on screen;
+  // redraws the line when the scroll position moved. Returns true while scrolling.
+  bool animateNowPlaying(uint32_t ms);
 
   // Second line shown under the error when there is no weather data (e.g. where
   // the settings page is). Empty string = none.
@@ -64,4 +68,12 @@ class WeatherUi {
   char _hint[64] = "";
   char _nowPlaying[32] = "";
   char _nowTitle[96] = "";
+  // Title scrolling (marquee)
+  static constexpr int SCROLL_GAP = 40;          // pixels between the end and the next repeat
+  static constexpr int SCROLL_PX_PER_S = 30;
+  static constexpr uint32_t SCROLL_PAUSE_MS = 2000;  // still at the start of each pass
+  int _titleW = 0;           // pixel width of the title if it doesn't fit, 0 = fits / none
+  int _scrollX = 0;          // current offset in pixels
+  uint32_t _scrollT0 = 0;    // start of the current pass (incl. pause)
+  bool _scrollRestart = true;
 };
