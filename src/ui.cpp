@@ -19,9 +19,15 @@ constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b)
 const uint16_t C_BG      = rgb(0, 0, 0);
 const uint16_t C_TEXT    = rgb(255, 255, 255);
 const uint16_t C_DIM     = rgb(165, 170, 180);
+#if CVBS_GRAYSCALE
+const uint16_t C_TRACK   = rgb(36, 36, 36);
+const uint16_t C_WARN    = rgb(230, 230, 230);
+const uint16_t C_HUMID   = rgb(200, 200, 200);
+#else
 const uint16_t C_TRACK   = rgb(40, 40, 85);  // maps to a neutral dark blue-grey in RGB332
 const uint16_t C_WARN    = rgb(255, 120, 40);
 const uint16_t C_HUMID   = rgb(70, 160, 255);
+#endif
 
 const lgfx::U8g2font fontSmall(u8g2_font_helvR14_tf);
 const lgfx::U8g2font fontMedium(u8g2_font_helvR18_tf);
@@ -124,6 +130,13 @@ const Stop GRADIENT[] = {
 
 void tempColor(float c, uint8_t& r, uint8_t& g, uint8_t& b)
 {
+#if CVBS_GRAYSCALE
+  // Brightness ramp instead of hues: -20 °C dark grey ... +40 °C white
+  float f = (c + 20.0f) / 60.0f;
+  f = f < 0 ? 0 : f > 1 ? 1 : f;
+  r = g = b = (uint8_t)lroundf(80 + f * 175);
+  return;
+#endif
   const int n = sizeof(GRADIENT) / sizeof(GRADIENT[0]);
   if (c <= GRADIENT[0].t) { r = GRADIENT[0].r; g = GRADIENT[0].g; b = GRADIENT[0].b; return; }
   for (int i = 1; i < n; ++i) {

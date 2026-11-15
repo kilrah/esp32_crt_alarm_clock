@@ -61,7 +61,11 @@ int main(int argc, char** argv)
   _tzset();
 
   lgfx::LGFX_Sprite screen;
+#if CVBS_GRAYSCALE
+  screen.setColorDepth(lgfx::color_depth_t::grayscale_8bit);
+#else
   screen.setColorDepth(CVBS_COLOR_DEPTH);
+#endif
   screen.createSprite(CVBS_PANEL_WIDTH, CVBS_PANEL_HEIGHT);
   WeatherUi ui;
   ui.begin(&screen);
@@ -151,7 +155,7 @@ int main(int argc, char** argv)
                          "snowy-rainy", "hail", "lightning", "lightning-rainy", "windy", "windy-variant",
                          "exceptional", "partlycloudy"};
     lgfx::LGFX_Sprite sheet;
-    sheet.setColorDepth(CVBS_COLOR_DEPTH);
+    sheet.setColorDepth(screen.getColorDepth());
     sheet.createSprite(4 * 72 + 4 * 36, 4 * 72);
     sheet.fillScreen(0);
     for (int i = 0; i < 16; ++i) {

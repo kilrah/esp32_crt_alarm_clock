@@ -107,6 +107,15 @@
 #ifndef CVBS_COLOR_DEPTH
 #define CVBS_COLOR_DEPTH      8
 #endif
+// 1 = grayscale for black & white TVs: 256 gray levels and no color information in
+// the picture (no dot patterns from the color carrier). Same 82 KB frame buffer as
+// 8-bit color; the library has no 4-bit mode for composite output.
+#ifndef CVBS_GRAYSCALE
+#define CVBS_GRAYSCALE        0
+#endif
+#if CVBS_GRAYSCALE && CVBS_COLOR_DEPTH != 8
+#error "CVBS_GRAYSCALE needs CVBS_COLOR_DEPTH 8"
+#endif
 // Vertical dithering of the temperature bars in 8-bit mode (smooths gradients;
 // the PAL decoder averages adjacent lines)
 #ifndef GRADIENT_DITHER

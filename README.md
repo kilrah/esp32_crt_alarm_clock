@@ -165,6 +165,9 @@ Old TVs overscan a lot. All settings are in [include/config.h](include/config.h)
 - `SCREEN_MARGIN`: extra safe margin around the content. The layout adapts to whatever area is left
 - `CVBS_PAL`: 1 for PAL, 0 for NTSC
 - `CVBS_OUTPUT_LEVEL` / `CVBS_CHROMA_LEVEL`: brightness and color saturation
+- `CVBS_GRAYSCALE`: 1 for black & white TVs. The picture carries no color information (no dot patterns
+  from the color carrier) and has 256 gray levels. Icons and temperature bars switch to a palette
+  designed for brightness (bars: darker = colder). Same memory use as 8-bit color.
 - `CVBS_COLOR_DEPTH`: 8 (RGB332, default) or 16 (RGB565). 16-bit needs about 176 KB for the frame buffer, which is
   very tight next to WiFi on an ESP32 without PSRAM.
 

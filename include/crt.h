@@ -34,6 +34,10 @@ class LGFX_CVBS : public lgfx::LGFX_Device
             cfg.chroma_level = CVBS_CHROMA_LEVEL;
             _panel_instance.config_detail(cfg);
         }
+#if CVBS_GRAYSCALE
+        // Before init(), so the frame buffer is allocated only once
+        _panel_instance.setColorDepth(lgfx::color_depth_t::grayscale_8bit);
+#endif
         setPanel(&_panel_instance);
     }
 };

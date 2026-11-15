@@ -1,4 +1,5 @@
 #include "icons.h"
+#include "config.h"
 #include <cstring>
 #include <cmath>
 
@@ -11,6 +12,21 @@ constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b)
   return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
+#if CVBS_GRAYSCALE
+// Black & white TV: pick brightness, not hue (yellow sun would be darker than the clouds)
+constexpr uint16_t gray(uint8_t v) { return rgb(v, v, v); }
+const uint16_t C_SUN        = gray(255);
+const uint16_t C_MOON       = gray(235);
+const uint16_t C_CLOUD      = gray(170);
+const uint16_t C_CLOUD_BACK = gray(115);
+const uint16_t C_CLOUD_DARK = gray(100);
+const uint16_t C_RAIN       = gray(235);
+const uint16_t C_SNOW       = gray(255);
+const uint16_t C_BOLT       = gray(255);
+const uint16_t C_FOG        = gray(150);
+const uint16_t C_WIND       = gray(210);
+const uint16_t C_WARN       = gray(220);
+#else
 const uint16_t C_SUN        = rgb(255, 196, 30);
 const uint16_t C_MOON       = rgb(235, 230, 190);
 const uint16_t C_CLOUD      = rgb(215, 220, 230);
@@ -22,6 +38,7 @@ const uint16_t C_BOLT       = rgb(255, 215, 0);
 const uint16_t C_FOG        = rgb(170, 175, 185);
 const uint16_t C_WIND       = rgb(190, 200, 215);
 const uint16_t C_WARN       = rgb(255, 120, 40);
+#endif
 
 // Maps a 64x64 design grid onto the target box.
 struct Tf {
