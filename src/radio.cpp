@@ -6,8 +6,19 @@
 #include <AudioFileSourceICYStream.h>
 #include <AudioFileSourceBuffer.h>
 #include <AudioGeneratorMP3.h>
+#if AUDIO_OUTPUT == AUDIO_OUT_I2S
 #include <AudioOutputI2S.h>
 #include <driver/i2s.h>
+#else
+#include <driver/timer.h>
+#if AUDIO_OUTPUT == AUDIO_OUT_DAC
+#include <driver/dac.h>
+#include <soc/i2s_struct.h>
+#include <soc/sens_struct.h>
+#else
+#include <soc/ledc_struct.h>
+#endif
+#endif
 
 namespace {
 
@@ -56,6 +67,7 @@ SemaphoreHandle_t stationsMutex;
 Station stations[RADIO_MAX_STATIONS];
 RadioAutoplay autoplay{false, 0};  // guarded by stationsMutex too
 
+#if AUDIO_OUTPUT == AUDIO_OUT_I2S
 // The legacy ESP-IDF I2S driver powers down the ESP32's built-in DAC whenever an I2S
 // port is uninstalled - even I2S1, which doesn't use it. The composite video comes out
 // of that DAC (I2S0 -> GPIO25), so stopping the radio blanked the TV. The audio driver
@@ -69,9 +81,205 @@ class PersistentI2S : public AudioOutputI2S {
     return true;
   }
 };
+using RadioOutput = PersistentI2S;
+
+#else
+// ---- Internal DAC / PWM output ------------------------------------------------------
+// The decoder (audio task) fills a ring buffer with ready-to-write output levels; a
+// hardware timer interrupt at the stream's sample rate writes one level per tick to
+// the DAC or the LEDC duty register. Both run on core 0 (the video interrupt is on core 1).
+static_assert((AUDIO_RING_SAMPLES & (AUDIO_RING_SAMPLES - 1)) == 0, "AUDIO_RING_SAMPLES must be a power of 2");
+constexpr uint32_t RING_MASK = AUDIO_RING_SAMPLES - 1;
+constexpr timer_group_t SAMPLE_TIMER_GROUP = TIMER_GROUP_0;
+constexpr timer_idx_t SAMPLE_TIMER = TIMER_0;
+constexpr uint32_t SAMPLE_TIMER_HZ = APB_CLK_FREQ / 2;  // divider 2 -> 40 MHz
+
+#if AUDIO_OUTPUT == AUDIO_OUT_DAC
+using Level = uint8_t;   // 8-bit DAC
+#else
+using Level = uint16_t;  // PWM duty incl. fractional bits
+#endif
+Level ring[AUDIO_RING_SAMPLES];     // .bss = internal RAM, safe for the IRAM interrupt
+volatile uint32_t ringHead = 0;     // written by the audio task
+volatile uint32_t ringTail = 0;     // written by the interrupt
+volatile uint16_t lastLevel;        // last level written to the hardware
+volatile uint32_t underruns = 0;    // timer ticks with an empty buffer (diagnostics)
+volatile bool primed = false;       // the current stream has delivered samples
+
+#if AUDIO_OUTPUT == AUDIO_OUT_DAC
+constexpr int32_t OUT_LEVELS = 256;  // 8-bit DAC
+inline void IRAM_ATTR writeLevel(uint16_t v)
+{
+  // Same 8-bit value in every byte: which half/byte of the 32-bit register reaches the
+  // DAC doesn't matter then
+  I2S0.conf_single_data = v * 0x01010101u;
+}
+#else
+constexpr int32_t OUT_LEVELS = (1 << AUDIO_PWM_BITS) << 4;  // duty incl. 4 fractional bits
+inline void IRAM_ATTR writeLevel(uint16_t v)
+{
+  LEDC.channel_group[0].channel[AUDIO_PWM_CHANNEL].duty.duty = v;
+  LEDC.channel_group[0].channel[AUDIO_PWM_CHANNEL].conf1.duty_start = 1;  // latched at next period
+}
+#endif
+constexpr uint16_t MID_LEVEL = OUT_LEVELS / 2;
+
+bool IRAM_ATTR sampleTimerIsr(void*)
+{
+  const uint32_t t = ringTail;
+  if (t != ringHead) {  // on underrun keep the last level (no click)
+    const uint16_t v = ring[t];
+    writeLevel(v);
+    lastLevel = v;
+    ringTail = (t + 1) & RING_MASK;
+  } else if (primed) {  // not the silence while a new stream is buffering
+    underruns = underruns + 1;
+  }
+  return false;  // no task woken
+}
+
+class SampleOutput : public AudioOutput {
+ public:
+  // Hardware setup that doesn't need an interrupt (any core)
+  void setupHardware()
+  {
+#if AUDIO_OUTPUT == AUDIO_OUT_DAC
+    // I2S0 (video) already drives the internal DACs from DMA. Power up the second DAC pad
+    // and give the I2S channel that isn't the video a constant value we control.
+    // Starts at 0 V; rampUp() then moves it to the idle level. The channel is switched to
+    // the constant before the DAC is powered, otherwise the pin briefly carries the video.
+    const dac_channel_t ch = CVBS_PIN == 25 ? DAC_CHANNEL_2 : DAC_CHANNEL_1;
+    writeLevel(0);
+    I2S0.conf_chan.tx_chan_mod = AUDIO_DAC_CHAN_MOD;
+    if (ch == DAC_CHANNEL_2) SENS.sar_dac_ctrl2.dac_cw_en2 = 0;  // no cosine generator
+    else SENS.sar_dac_ctrl2.dac_cw_en1 = 0;
+    dac_output_enable(ch);
+#else
+    ledcSetup(AUDIO_PWM_CHANNEL, APB_CLK_FREQ >> AUDIO_PWM_BITS, AUDIO_PWM_BITS);
+    ledcWrite(AUDIO_PWM_CHANNEL, 0);  // 0 V; also sets up the fixed-duty mode
+    ledcAttachPin(AUDIO_PWM_PIN, AUDIO_PWM_CHANNEL);
+#endif
+    lastLevel = 0;
+    hertz = 0;  // not initialized by AudioOutput
+  }
+
+  // Power-up: raise the output from 0 V to the idle level (half the supply) slowly and
+  // along a raised-cosine curve. A step would pass the coupling capacitor and the amplifier
+  // as a thump; the low-pass filter doesn't help against it. ~0.5 s keeps the energy below
+  // the coupling capacitor's high-pass corner. Blocks the calling task.
+  void rampUp()
+  {
+    constexpr int STEPS = 250;
+    for (int i = 1; i <= STEPS; ++i) {
+      const float f = 0.5f - 0.5f * cosf((float)M_PI * i / STEPS);
+      writeLevel((uint16_t)(MID_LEVEL * f + 0.5f));
+      vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    lastLevel = MID_LEVEL;
+  }
+
+  // Must be called on core 0: the interrupt is allocated on the calling core
+  void setupTimer()
+  {
+    timer_config_t cfg = {};
+    cfg.alarm_en = TIMER_ALARM_EN;
+    cfg.counter_en = TIMER_PAUSE;
+    cfg.intr_type = TIMER_INTR_LEVEL;
+    cfg.counter_dir = TIMER_COUNT_UP;
+    cfg.auto_reload = TIMER_AUTORELOAD_EN;
+    cfg.divider = APB_CLK_FREQ / SAMPLE_TIMER_HZ;
+    timer_init(SAMPLE_TIMER_GROUP, SAMPLE_TIMER, &cfg);
+    timer_set_counter_value(SAMPLE_TIMER_GROUP, SAMPLE_TIMER, 0);
+    timer_set_alarm_value(SAMPLE_TIMER_GROUP, SAMPLE_TIMER, SAMPLE_TIMER_HZ / 44100);
+    timer_enable_intr(SAMPLE_TIMER_GROUP, SAMPLE_TIMER);
+    timer_isr_callback_add(SAMPLE_TIMER_GROUP, SAMPLE_TIMER, sampleTimerIsr, nullptr, ESP_INTR_FLAG_IRAM);
+  }
+
+  bool SetRate(int hz) override
+  {
+    if (hz < 8000 || hz > 48000) return false;
+    if (hz == hertz) return true;
+    hertz = hz;
+    // The alarm only fires when the counter reaches it: lowering it below the current
+    // count would stop the interrupt until the 54-bit counter wraps (audio frozen). Restart
+    // the count from 0.
+    timer_pause(SAMPLE_TIMER_GROUP, SAMPLE_TIMER);
+    timer_set_counter_value(SAMPLE_TIMER_GROUP, SAMPLE_TIMER, 0);
+    timer_set_alarm_value(SAMPLE_TIMER_GROUP, SAMPLE_TIMER, (SAMPLE_TIMER_HZ + hz / 2) / hz);
+    if (running) timer_start(SAMPLE_TIMER_GROUP, SAMPLE_TIMER);
+    return true;
+  }
+
+  bool begin() override
+  {
+    err = 0;
+    primed = false;
+    if (!running) {
+      timer_set_counter_value(SAMPLE_TIMER_GROUP, SAMPLE_TIMER, 0);
+      timer_start(SAMPLE_TIMER_GROUP, SAMPLE_TIMER);
+      running = true;
+    }
+    return true;
+  }
+
+  bool ConsumeSample(int16_t sample[2]) override
+  {
+    const uint32_t h = ringHead;
+    const uint32_t next = (h + 1) & RING_MASK;
+    if (next == ringTail) return false;  // full: the decoder retries later
+
+    int16_t s[2] = {sample[0], sample[1]};
+    MakeSampleStereo16(s);
+    const int32_t mono = ((int32_t)Amplify(s[0]) + Amplify(s[1])) / 2;
+    // Scale to output levels (16.16 fixed point) with first-order noise shaping: the
+    // quantization error is fed into the next sample, which moves the noise of the
+    // coarse (8-bit) output towards high frequencies where the RC filter removes it.
+    const int32_t v = mono * OUT_LEVELS + ((int32_t)MID_LEVEL << 16) + err;
+    int32_t q = v >> 16;
+    if (q < 0) {
+      q = 0;
+      err = 0;
+    } else if (q > OUT_LEVELS - 1) {
+      q = OUT_LEVELS - 1;
+      err = 0;
+    } else {
+      err = v - (q << 16);
+    }
+    ring[h] = (Level)q;
+    __asm__ __volatile__("" ::: "memory");  // sample stored before the index moves
+    ringHead = next;
+    // Count underruns once the buffer has filled up for the first time
+    if (!primed && ((next - ringTail) & RING_MASK) >= RING_MASK / 2) primed = true;
+    return true;
+  }
+
+  bool stop() override
+  {
+    if (running) {
+      timer_pause(SAMPLE_TIMER_GROUP, SAMPLE_TIMER);
+      running = false;
+    }
+    primed = false;
+    ringHead = ringTail = 0;
+    // Ramp to the idle level over ~3 ms instead of jumping (avoids a click)
+    const int32_t from = lastLevel;
+    for (int i = 1; i <= 64; ++i) {
+      writeLevel((uint16_t)(from + (MID_LEVEL - from) * i / 64));
+      delayMicroseconds(50);
+    }
+    lastLevel = MID_LEVEL;
+    return true;
+  }
+
+ private:
+  bool running = false;
+  int32_t err = 0;
+};
+using RadioOutput = SampleOutput;
+#endif
 
 // ---- Audio task state (audio task only) ---------------------------------------------
-PersistentI2S* out = nullptr;
+RadioOutput* out = nullptr;
 AudioFileSourceICYStream* file = nullptr;
 AudioFileSourceBuffer* buff = nullptr;
 AudioGeneratorMP3* mp3 = nullptr;
@@ -241,6 +449,10 @@ void handleCmd(const Cmd& c)
 
 void audioTask(void*)
 {
+#if AUDIO_OUTPUT != AUDIO_OUT_I2S
+  out->setupTimer();  // allocates the sample interrupt on this core
+  out->rampUp();      // 0 V -> idle level without a click (play commands wait in the queue)
+#endif
   for (;;) {
     const bool running = mp3 && mp3->isRunning();
     TickType_t wait = running ? 0 : pdMS_TO_TICKS(wantPlay ? 200 : 1000);
@@ -332,6 +544,7 @@ void radioBegin()
   if (volume > 100) volume = RADIO_DEFAULT_VOLUME;
   status.volume = volume;
 
+#if AUDIO_OUTPUT == AUDIO_OUT_I2S
 #if I2S_SCK_LOW_PIN >= 0
   // PCM5102 SCK held low = no external master clock, use the internal PLL
   pinMode(I2S_SCK_LOW_PIN, OUTPUT);
@@ -340,11 +553,23 @@ void radioBegin()
   out = new PersistentI2S(1, AudioOutputI2S::EXTERNAL_I2S);  // I2S0 belongs to the video
   out->SetPinout(I2S_BCK_PIN, I2S_LRCK_PIN, I2S_DOUT_PIN);
   out->begin();  // install the driver now (DMA buffers allocated before WiFi fragments the heap)
+#else
+  out = new SampleOutput();
+  out->setupHardware();  // the timer interrupt is set up by the audio task (core 0)
+#endif
   applyVolume(volume);
 
   xTaskCreatePinnedToCore(audioTask, "audio", 5120, nullptr, AUDIO_TASK_PRIO, nullptr, AUDIO_TASK_CORE);
+#if AUDIO_OUTPUT == AUDIO_OUT_I2S
   Serial.printf("[Radio] Ready, I2S1 BCK %d LRCK %d DOUT %d, volume %u\n", I2S_BCK_PIN, I2S_LRCK_PIN,
                 I2S_DOUT_PIN, volume);
+#elif AUDIO_OUTPUT == AUDIO_OUT_DAC
+  Serial.printf("[Radio] Ready, internal DAC on GPIO%d (I2S0 chan_mod %d), volume %u\n", CVBS_PIN == 25 ? 26 : 25,
+                AUDIO_DAC_CHAN_MOD, volume);
+#else
+  Serial.printf("[Radio] Ready, PWM on GPIO%d (%u kHz, %d+4 bits), volume %u\n", AUDIO_PWM_PIN,
+                (unsigned)((APB_CLK_FREQ >> AUDIO_PWM_BITS) / 1000), AUDIO_PWM_BITS, volume);
+#endif
 }
 
 void radioPlay(int index)
@@ -391,6 +616,15 @@ RadioStatus radioStatus()
 }
 
 uint32_t radioStatusVersion() { return statusVersion; }
+
+uint32_t radioUnderruns()
+{
+#if AUDIO_OUTPUT == AUDIO_OUT_I2S
+  return 0;  // not measured (the I2S driver repeats its DMA buffer)
+#else
+  return underruns;
+#endif
+}
 
 RadioAutoplay radioAutoplay()
 {
@@ -450,6 +684,19 @@ const char* validateStation(const Station& s)
     return "Station URLs must start with http:// (https streams are not supported, not enough RAM)";
   if (strchr(s.url, ' ')) return "Station URL must not contain spaces";
   return nullptr;
+}
+
+#define STR_(x) #x
+#define STR(x) STR_(x)
+const char* radioOutputName()
+{
+#if AUDIO_OUTPUT == AUDIO_OUT_I2S
+  return "I2S DAC (PCM5102) on GPIO" STR(I2S_BCK_PIN) "/" STR(I2S_LRCK_PIN) "/" STR(I2S_DOUT_PIN);
+#elif AUDIO_OUTPUT == AUDIO_OUT_DAC
+  return CVBS_PIN == 25 ? "Internal DAC on GPIO26 (8-bit)" : "Internal DAC on GPIO25 (8-bit)";
+#else
+  return "PWM on GPIO" STR(AUDIO_PWM_PIN) " (" STR(AUDIO_PWM_BITS) "+4 bit)";
+#endif
 }
 
 const char* radioStateName(RadioState s)

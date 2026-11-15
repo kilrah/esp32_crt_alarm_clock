@@ -25,7 +25,7 @@ drawing code, using the 8-bit frame buffer format the ESP32 uses.)*
   timezone can be changed without rebooting. If the WiFi can't be joined, the clock opens its own access point
   with a captive portal
 - Firmware updates over the network (web page upload or PlatformIO OTA)
-- Web radio through a PCM5102 I2S DAC: 8 station presets, volume, "now playing" on the TV,
+- Web radio through a PCM5102 I2S DAC (or, at lower quality, the second internal DAC or a PWM pin): 8 station presets, volume, "now playing" on the TV,
   and an HTTP API so Home Assistant can use it as a radio alarm
 - Flicker-free updates: each screen section is drawn off-screen first and then copied into the frame buffer
 - An orange dot appears in the top-left corner when the data is older than 30 min. Errors are shown on screen
@@ -52,6 +52,20 @@ drawing code, using the 8-bit frame buffer format the ESP32 uses.)*
 
   The line output (~2 V RMS) goes to an amplifier, e.g. the TV's own audio amplifier
   (at its volume pot). Pins can be changed with `I2S_*_PIN` in `config.h`.
+
+- Audio without the PCM5102 (lower quality, mono), selected with `AUDIO_OUTPUT` in `config.h`
+  or by building one of these environments:
+
+  | Environment | `AUDIO_OUTPUT` | Output |
+  |---|---|---|
+  | `esp32dev_pal` | 0 | PCM5102 on I2S1 (above) |
+  | `esp32dev_pal-dac` | 1 | GPIO26, the ESP32's second internal DAC. 8 bits with noise shaping. The video's I2S stream drives both DACs, so the audio goes through I2S0's "constant value" channel and is updated by a timer interrupt at the sample rate. If there is no sound or the picture is lost, try `-D AUDIO_DAC_CHAN_MOD=4` |
+  | `esp32dev_pal-pwm` | 2 | GPIO26 (`AUDIO_PWM_PIN`), LEDC PWM at 312.5 kHz, 8 bits + 4 bits of hardware dithering |
+
+  Both use the same wiring: GPIO26 → 1 kΩ → 10 nF to GND → 4.7 kΩ → 2.2 nF to GND
+  (two RC low-pass stages at ~15 kHz) → 1 µF → amplifier input. The output swings 0–3.3 V
+  around a 1.65 V idle level. Both options cost one interrupt per sample (44,100/s) on core 0.
+  They use 4 KB of RAM for the sample buffer and save the ~5 KB of I2S DMA buffers.
 
 ### Connecting to the alarm clock TV
 The TV in these clocks expects an RF/antenna signal. If the set has an AV/video

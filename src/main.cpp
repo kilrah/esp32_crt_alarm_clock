@@ -92,6 +92,7 @@ static void heapReport()
   static uint32_t last = 0;
   if (millis() - last < DEBUG_HEAP_LOG_S * 1000UL) return;
   last = millis();
+  Serial.printf("[Radio] %s, underruns %u\n", radioStateName(radioStatus().state), (unsigned)radioUnderruns());
   Serial.printf("[Heap] 8bit free %u largest %u min-ever %u | internal %u | stack free: loop %u",
                 heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
                 heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT), heap_caps_get_free_size(MALLOC_CAP_INTERNAL),

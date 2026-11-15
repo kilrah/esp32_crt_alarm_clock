@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 // Web radio: http:// MP3 streams decoded on the ESP32 and played through an I2S DAC
-// (PCM5102) on I2S1. Decoding runs in its own task on core 0. All functions below
+// (PCM5102) on I2S1, the second internal DAC or a PWM pin (AUDIO_OUTPUT). Decoding runs in its own task on core 0. All functions below
 // are thread-safe and non-blocking (commands are queued to the audio task).
 
 struct Station {
@@ -30,6 +30,9 @@ void radioSetVolume(int volume);                  // 0-100, persisted
 
 RadioStatus radioStatus();
 uint32_t radioStatusVersion();  // increments whenever the status changes (lock-free)
+// Samples that could not be played because the decoder fell behind, since boot
+// (internal DAC / PWM output only, 0 with I2S)
+uint32_t radioUnderruns();
 
 // Autoplay: start a preset automatically once WiFi is up after boot (persisted)
 struct RadioAutoplay {
@@ -43,4 +46,5 @@ Station radioStation(int index);                  // copy; empty if out of range
 void radioSetStation(int index, const Station& s);  // persist one slot
 const char* validateStation(const Station& s);      // nullptr if OK
 
+const char* radioOutputName();  // compiled-in audio output (AUDIO_OUTPUT), for display
 const char* radioStateName(RadioState s);  // "stopped", "connecting", "playing", "retrying"

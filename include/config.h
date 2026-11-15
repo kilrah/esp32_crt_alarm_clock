@@ -122,7 +122,53 @@
 #define GRADIENT_DITHER       1
 #endif
 
+// --- Web radio audio output -----------------------------------------------------
+// Where the decoded audio goes (mono, left + right mixed for the internal options):
+#define AUDIO_OUT_I2S         0    // PCM5102 or other I2S DAC on I2S1 (best quality)
+#define AUDIO_OUT_DAC         1    // ESP32's other internal DAC pin (GPIO26 when the video is on
+                                   // GPIO25). 8-bit, no extra parts except an RC filter
+#define AUDIO_OUT_PWM         2    // LEDC PWM on AUDIO_PWM_PIN, needs an RC low-pass filter
+#ifndef AUDIO_OUTPUT
+#define AUDIO_OUTPUT          AUDIO_OUT_I2S
+#endif
+#if AUDIO_OUTPUT != AUDIO_OUT_I2S && AUDIO_OUTPUT != AUDIO_OUT_DAC && AUDIO_OUTPUT != AUDIO_OUT_PWM
+#error "AUDIO_OUTPUT must be 0 (I2S), 1 (DAC) or 2 (PWM)"
+#endif
+// AUDIO_OUT_DAC: the video's I2S0 stream feeds both internal DACs. The video's channel stays
+// as it is and the other channel is switched to I2S0's "constant value" register, which
+// a timer interrupt updates at the stream's sample rate. 3 = left channel constant (video on
+// GPIO25), 4 = right channel constant (video on GPIO26). 3 with the video on GPIO25 is
+// verified on hardware; try the other value if there is no sound or the picture is lost.
+#ifndef AUDIO_DAC_CHAN_MOD
+#define AUDIO_DAC_CHAN_MOD    (CVBS_PIN == 25 ? 3 : 4)
+#endif
+// AUDIO_OUT_PWM: output pin, LEDC channel (high-speed group) and resolution. The PWM
+// frequency is 80 MHz / 2^bits: 8 = 312.5 kHz (easy to filter), 9 = 156 kHz, 10 = 78 kHz.
+// The 4 fractional duty bits of the LEDC are used too (hardware dithering).
+#ifndef AUDIO_PWM_PIN
+#define AUDIO_PWM_PIN         26
+#endif
+#ifndef AUDIO_PWM_CHANNEL
+#define AUDIO_PWM_CHANNEL     0    // 0-7
+#endif
+#ifndef AUDIO_PWM_BITS
+#define AUDIO_PWM_BITS        8
+#endif
+#if AUDIO_PWM_BITS < 6 || AUDIO_PWM_BITS > 10
+#error "AUDIO_PWM_BITS must be 6-10"
+#endif
+#if AUDIO_OUTPUT == AUDIO_OUT_PWM && AUDIO_PWM_PIN == CVBS_PIN
+#error "AUDIO_PWM_PIN must not be the video pin"
+#endif
+// DAC/PWM: samples buffered between the decoder and the sample-rate timer interrupt
+// (power of 2; 1024 = 23 ms at 44.1 kHz like the I2S DMA buffers; 1 KB of RAM with the
+// DAC, 2 KB with PWM). Network hiccups are bridged by RADIO_BUFFER_BYTES, not by this.
+#ifndef AUDIO_RING_SAMPLES
+#define AUDIO_RING_SAMPLES    1024
+#endif
+
 // --- Web radio (PCM5102 or other I2S DAC on the ESP32's second I2S port) ------
+// Only used with AUDIO_OUTPUT == AUDIO_OUT_I2S.
 // I2S0 is used by the composite video, the DAC runs on I2S1.
 #ifndef I2S_BCK_PIN
 #define I2S_BCK_PIN           4    // PCM5102 BCK

@@ -388,7 +388,9 @@ static void sendPage(const char* message = nullptr, bool isError = false)
     html += htmlEscape(s.wifiSsid);
     html += F("&quot; could not be joined. Saving the WiFi settings tries again.</b>");
   }
-  html += F("<br>Hostname: " DEVICE_HOSTNAME ".local<br>Weather: ");
+  html += F("<br>Hostname: " DEVICE_HOSTNAME ".local<br>Audio output: ");
+  html += radioOutputName();
+  html += F("<br>Weather: ");
   if (lastOk > 0) {
     char buf[32];
     tm lt;
@@ -530,7 +532,11 @@ static void sendRadioJson(int code = 200, const char* error = nullptr)
   json += r.volume;
   json += F(",\"error\":\"");
   json += jsonEscape(error ? error : r.error);
-  json += F("\"}");
+  json += F("\",\"output\":\"");
+  json += radioOutputName();
+  json += F("\",\"underruns\":");
+  json += radioUnderruns();
+  json += F("}");
   server.sendHeader("Cache-Control", "no-store");
   server.send(code, "application/json", json);
 }
