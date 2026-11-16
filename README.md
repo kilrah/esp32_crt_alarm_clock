@@ -1,10 +1,18 @@
 # ESP32 Weather Clock (composite video)
 
-Turns an old alarm clock with a built-in 5" TV into a weather clock. An ESP32
+Turns an old alarm clock with a built-in TV into a weather alarm clock. An ESP32
 generates a PAL (or NTSC) composite video signal with its internal DAC and
-shows the time, current conditions and the forecast from **Home Assistant**.
+shows the time, current conditions and the forecast from your Home Assistant instance.
 The layout follows the
 [clock-weather-card](https://github.com/pkissling/clock-weather-card) for Lovelace.
+
+Wakes you up smoothly with a configurable fade-in to the webradio of your choice, with an optional local backup file you provide if connection fails.
+
+![Real TV](images/intervision_tv.jpg)
+
+Video:
+
+[![video](https://img.youtube.com/vi/4F7gIu1MGrE/0.jpg)](https://youtu.be/4F7gIu1MGrE)
 
 ![Preview](images/preview_day.png)
 
