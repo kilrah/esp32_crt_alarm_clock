@@ -78,8 +78,9 @@ RadioAutoplay autoplay{false, 0, 0};  // guarded by stationsMutex too
 constexpr int32_t FADE_FULL = 1 << 15;
 int32_t fadeQ = FADE_FULL;
 uint32_t fadeMs = 0;        // duration
-uint32_t fadeStart = 0;     // 0 = not running
-bool fadeArmed = false;     // starts with the first sound (stream or backup alarm)
+uint32_t fadeStart = 0;
+bool fadeRunning = false;
+bool fadeArmed = false;    // starts with the first sound (stream or backup alarm)
 
 inline int16_t faded(int16_t s) { return (int16_t)((s * fadeQ) >> 15); }
 
@@ -108,7 +109,7 @@ inline void sampleWritten()
 void fadeCancel()
 {
   fadeArmed = false;
-  fadeStart = 0;
+  fadeRunning = false;
   fadeQ = FADE_FULL;
 }
 
@@ -127,12 +128,15 @@ void fadeOnSound()
 {
   if (!fadeArmed) return;
   fadeArmed = false;
-  fadeStart = millis() | 1;
+  // Not "millis() | 1" with 0 = not running: that can be 1 ms in the future, and an update
+  // within the same millisecond then saw a huge elapsed time and ended the fade at once
+  fadeStart = millis();
+  fadeRunning = true;
 }
 
 void fadeUpdate()
 {
-  if (!fadeStart) return;
+  if (!fadeRunning) return;
   const uint32_t e = millis() - fadeStart;
   if (e >= fadeMs) {
     fadeCancel();
@@ -671,7 +675,8 @@ void audioTask(void*)
       if (!mp3 && backupDue()) startBackup();
     }
 
-    if (volumeSaveAt && millis() - volumeSaveAt >= VOLUME_SAVE_DELAY_MS) {
+    // Signed: volumeSaveAt ("| 1") can be 1 ms ahead of millis()
+    if (volumeSaveAt && (int32_t)(millis() - volumeSaveAt) >= (int32_t)VOLUME_SAVE_DELAY_MS) {
       volumeSaveAt = 0;
       Preferences p;
       if (p.begin(NVS_NAMESPACE, false)) {
