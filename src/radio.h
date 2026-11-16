@@ -42,6 +42,16 @@ uint32_t radioStatusVersion();  // increments whenever the status changes (lock-
 // Samples that could not be played because the decoder fell behind, since boot
 // (internal DAC / PWM output only, 0 with I2S)
 uint32_t radioUnderruns();
+// Diagnostics: longest time (ms) the output went without new samples since the last
+// call (I2S output only). More than the output buffer holds (AUDIO_I2S_DMA_BUFFERS) is
+// an audible gap.
+uint32_t radioMaxGapMs();
+// Diagnostics: percent of the time since the last call that the audio task spent in the
+// decoder (decoding, writing samples, waiting for stream data). Near 100 = can't keep up.
+int radioAudioLoad();
+// Diagnostics: times the network buffer (RADIO_BUFFER_BYTES) ran empty since boot: the
+// stream did not arrive fast enough. Each one is a pause of up to 0.5 s.
+uint32_t radioStreamDry();
 
 // Autoplay: start a preset automatically after boot (persisted). Works without WiFi too:
 // the backup alarm sound plays then.

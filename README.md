@@ -134,8 +134,8 @@ Limits:
   frame buffer, and AAC isn't decoded. Most stations still offer a plain http MP3 stream. Look one up on
   [radio-browser.info](https://www.radio-browser.info) (codec MP3, URL starting with `http://`).
   A stream that redirects to https won't play.
-- **RAM is at its limit on an ESP32 without PSRAM** (measured): the frame buffer takes 82 KB,
-  WiFi/lwIP/mDNS ~68 KB, and the radio permanently reserves 37 KB at boot (MP3 decoder + stream buffer,
+- **RAM is at its limit on an ESP32 without PSRAM** (measured): the frame buffer takes 73 KB,
+  WiFi/lwIP/mDNS ~68 KB, and the radio permanently reserves 41 KB at boot (MP3 decoder, stream buffer and I2S buffers,
   so they can't fragment). That leaves ~30 KB free at idle and 3-15 KB while streaming. It works,
   but there is no safety margin. Use **http** for Home Assistant, because https needs ~40 KB more. For
   headroom (and https), use an ESP32 board with PSRAM (WROVER): the frame buffer can then
@@ -143,6 +143,10 @@ Limits:
   (byte-addressable RAM only) and the lowest value since boot. `DEBUG_HEAP_LOG_S` in `config.h`
   logs memory and task stack headroom to the serial port.
 - Lost streams are reconnected automatically (3 s, 10 s, 30 s, then every minute).
+- Loading the settings page while the radio plays can still cause a short dropout: serving the page
+  holds the decoder up for 30-60 ms, and the I2S buffer covers 46 ms (`AUDIO_I2S_DMA_BUFFERS`, 0.5 KB
+  of RAM per 2.9 ms). With `DEBUG_HEAP_LOG_S` the serial log shows the longest gap, the decoder's
+  load and how often the stream buffer ran empty.
 
 ### Backup alarm sound
 If the radio should play but there is no stream for 30 s (`RADIO_BACKUP_AFTER_S`: internet or
@@ -169,7 +173,7 @@ The clock has a small HTTP API (no login, so keep it on your LAN). Station numbe
 | `POST /api/radio/play?url=http://...&name=Foo` | Play any http MP3 stream |
 | `POST /api/radio/stop` | Stop |
 | `POST /api/radio/volume?value=40` or `?change=-5` | Set or change the volume (0-100) |
-| `GET /api/radio` | Status as JSON: `state` (`stopped`, `connecting`, `playing`, `retrying`, `backup`), `station`, `name`, `title`, `volume`, `error`, `backup_sound` (file present) |
+| `GET /api/radio` | Status as JSON: `state` (`stopped`, `connecting`, `playing`, `retrying`, `backup`), `station`, `name`, `title`, `volume`, `error`, `backup_sound` (file present), `underruns` (audible gaps since boot) |
 
 ```yaml
 # configuration.yaml (use the clock's IP if Home Assistant can't resolve .local names)
@@ -198,14 +202,15 @@ A wake-up automation can call `rest_command.clock_radio_volume` with a low volum
 
 ## Adjusting the picture
 Old TVs overscan a lot. All settings are in [include/config.h](include/config.h):
-- `CVBS_PANEL_WIDTH/HEIGHT`, `CVBS_OFFSET_X/Y`: visible area inside the frame buffer
-- `SCREEN_MARGIN`: extra safe margin around the content. The layout adapts to whatever area is left
+- `CVBS_PANEL_WIDTH/HEIGHT`, `CVBS_OFFSET_X/Y`: drawn area and where it sits in the picture. Only this area
+  uses RAM (1 byte per pixel); the layout adapts to its size
+- `SCREEN_MARGIN`: extra black margin inside the drawn area (0: a smaller panel does the same without the RAM)
 - `CVBS_PAL`: 1 for PAL, 0 for NTSC
 - `CVBS_OUTPUT_LEVEL` / `CVBS_CHROMA_LEVEL`: brightness and color saturation
 - `CVBS_GRAYSCALE`: 1 for black & white TVs. The picture carries no color information (no dot patterns
   from the color carrier) and has 256 gray levels. Icons and temperature bars switch to a palette
   designed for brightness (bars: darker = colder). Same memory use as 8-bit color.
-- `CVBS_COLOR_DEPTH`: 8 (RGB332, default) or 16 (RGB565). 16-bit needs about 176 KB for the frame buffer, which is
+- `CVBS_COLOR_DEPTH`: 8 (RGB332, default) or 16 (RGB565). 16-bit needs about 147 KB for the frame buffer, which is
   very tight next to WiFi on an ESP32 without PSRAM.
 
 ## Project layout

@@ -83,6 +83,28 @@ bool fadeArmed = false;     // starts with the first sound (stream or backup ala
 
 inline int16_t faded(int16_t s) { return (int16_t)((s * fadeQ) >> 15); }
 
+// ---- Diagnostics: gaps in the sample flow to the output -------------------------------
+// A gap longer than what the output buffers (OUTPUT_BUFFER_MS) is audible.
+#if AUDIO_OUTPUT == AUDIO_OUT_I2S
+constexpr uint32_t OUTPUT_BUFFER_MS = AUDIO_I2S_DMA_BUFFERS * 128 * 1000 / 44100;
+#else
+constexpr uint32_t OUTPUT_BUFFER_MS = AUDIO_RING_SAMPLES * 1000 / 44100;
+#endif
+uint32_t lastSampleTick = 0;         // 0 = stream just started
+volatile uint32_t maxGapMs = 0;      // longest since radioMaxGapMs() was last called
+volatile uint32_t stalls = 0;        // gaps longer than the buffer, since boot
+
+inline void sampleWritten()
+{
+  const uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS | 1;
+  if (lastSampleTick) {
+    const uint32_t gap = now - lastSampleTick;
+    if (gap > maxGapMs) maxGapMs = gap;
+    if (gap > OUTPUT_BUFFER_MS) stalls = stalls + 1;
+  }
+  lastSampleTick = now;
+}
+
 void fadeCancel()
 {
   fadeArmed = false;
@@ -132,14 +154,52 @@ class PersistentI2S : public AudioOutputI2S {
   bool stop() override
   {
     if (i2sOn) i2s_zero_dma_buffer((i2s_port_t)portNo);
+    lastSampleTick = 0;
+    count = sent = 0;
     return true;
   }
+
+  // The library hands every sample to the I2S driver in a call of its own (44100 calls
+  // per second, each taking the driver's lock): that alone kept the audio task busy most
+  // of the time. Samples are collected here and passed on in blocks instead.
   bool ConsumeSample(int16_t sample[2]) override
   {
-    if (fadeQ == FADE_FULL) return AudioOutputI2S::ConsumeSample(sample);
-    int16_t s[2] = {faded(sample[0]), faded(sample[1])};
-    return AudioOutputI2S::ConsumeSample(s);
+    if (!i2sOn) return false;
+    if (count == BLOCK && !sendBlock()) return false;  // driver full: the decoder retries later
+    int16_t s[2] = {sample[0], sample[1]};
+    MakeSampleStereo16(s);
+    if (fadeQ != FADE_FULL) {
+      s[0] = faded(s[0]);
+      s[1] = faded(s[1]);
+    }
+    block[count++] = ((uint32_t)(uint16_t)Amplify(s[RIGHTCHANNEL]) << 16) | (uint16_t)Amplify(s[LEFTCHANNEL]);
+    return true;
   }
+
+  // Called after every decoder pass: don't sit on a partly filled block
+  bool loop() override
+  {
+    if (count) sendBlock();
+    return true;
+  }
+
+ private:
+  // Passes the collected block on; false if the driver didn't take all of it yet
+  bool sendBlock()
+  {
+    size_t written = 0;
+    i2s_write((i2s_port_t)portNo, (const char*)block + sent, count * sizeof(uint32_t) - sent, &written, 0);
+    if (written) sampleWritten();
+    sent += written;
+    if (sent < count * sizeof(uint32_t)) return false;
+    count = sent = 0;
+    return true;
+  }
+
+  static constexpr size_t BLOCK = 128;  // stereo samples (2.9 ms)
+  uint32_t block[BLOCK];
+  size_t count = 0;  // samples in the block
+  size_t sent = 0;   // bytes of it the driver already has
 };
 using RadioOutput = PersistentI2S;
 
@@ -352,6 +412,15 @@ char wantUrl[128] = "";
 uint32_t retryAt = 0;
 int retryCount = 0;
 uint32_t volumeSaveAt = 0;   // 0 = nothing pending
+// Diagnostics: share of the time the audio task spends decoding / waiting for the network
+volatile uint32_t busyUs = 0;        // inside the decoder since radioAudioLoad() was last called
+uint32_t busySinceUs = 0;
+volatile uint32_t streamDry = 0;     // times the network buffer ran empty, since boot
+
+void onBufferStatus(void*, int code, const char*)
+{
+  if (code == AudioFileSourceBuffer::STATUS_UNDERFLOW) streamDry = streamDry + 1;
+}
 // Backup alarm sound (RADIO_BACKUP_AFTER_S)
 AudioFileSourceFS* backupFile = nullptr;  // != nullptr while the sound is playing
 uint32_t backupSize = 0;     // size of the file found at boot, 0 = none
@@ -511,6 +580,7 @@ void startStream()
     return;
   }
   buff = new AudioFileSourceBuffer(file, streamBuffer, RADIO_BUFFER_BYTES);
+  buff->RegisterStatusCB(onBufferStatus, nullptr);
   mp3 = new AudioGeneratorMP3(mp3Space, AudioGeneratorMP3::preAllocSize());
   if (!mp3->begin(buff, out)) {
     stopStream();
@@ -581,7 +651,10 @@ void audioTask(void*)
     fadeUpdate();
 
     if (mp3 && mp3->isRunning()) {
-      if (!mp3->loop()) {
+      const uint32_t t = micros();
+      const bool ok = mp3->loop();
+      busyUs = busyUs + (micros() - t);
+      if (!ok) {
         const bool wasBackup = backupFile != nullptr;
         stopStream();
         if (wasBackup) {
@@ -606,7 +679,7 @@ void audioTask(void*)
         p.end();
       }
     }
-    // The decoder returns as soon as the I2S DMA buffer (~23 ms) is full: yield
+    // The decoder returns as soon as the output buffer is full: yield
     vTaskDelay(1);
   }
 }
@@ -690,7 +763,7 @@ void radioBegin()
   pinMode(I2S_SCK_LOW_PIN, OUTPUT);
   digitalWrite(I2S_SCK_LOW_PIN, LOW);
 #endif
-  out = new PersistentI2S(1, AudioOutputI2S::EXTERNAL_I2S);  // I2S0 belongs to the video
+  out = new PersistentI2S(1, AudioOutputI2S::EXTERNAL_I2S, AUDIO_I2S_DMA_BUFFERS);  // I2S0 belongs to the video
   out->SetPinout(I2S_BCK_PIN, I2S_LRCK_PIN, I2S_DOUT_PIN);
   out->begin();  // install the driver now (DMA buffers allocated before WiFi fragments the heap)
 #else
@@ -763,7 +836,7 @@ uint32_t radioStatusVersion() { return statusVersion; }
 uint32_t radioUnderruns()
 {
 #if AUDIO_OUTPUT == AUDIO_OUT_I2S
-  return 0;  // not measured (the I2S driver repeats its DMA buffer)
+  return stalls;  // estimate: times no samples arrived for longer than the DMA buffers last
 #else
   return underruns;
 #endif
@@ -856,3 +929,20 @@ const char* radioStateName(RadioState s)
 }
 
 uint32_t radioBackupSize() { return backupSize; }
+
+uint32_t radioStreamDry() { return streamDry; }
+
+uint32_t radioMaxGapMs()
+{
+  const uint32_t g = maxGapMs;
+  maxGapMs = 0;
+  return g;
+}
+
+int radioAudioLoad()
+{
+  const uint32_t now = micros(), span = now - busySinceUs, busy = busyUs;
+  busySinceUs = now;
+  busyUs = 0;
+  return span ? (int)((uint64_t)busy * 100 / span) : 0;
+}

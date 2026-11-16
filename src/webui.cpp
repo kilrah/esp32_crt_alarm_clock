@@ -199,6 +199,10 @@ static void handleWifi()
 }
 
 // ---- Page ------------------------------------------------------------------------
+// Pages are sent in pieces of about this size instead of being built in one String:
+// several KB in one block are not always available while the radio is playing
+static constexpr size_t PAGE_CHUNK = 1400;
+
 static String htmlEscape(const char* in)
 {
   String out;
@@ -321,12 +325,13 @@ static void sendPage(const char* message = nullptr, bool isError = false)
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/html", "");
   String html;
-  html.reserve(1600);
+  html.reserve(PAGE_CHUNK);
   auto flush = [&] {
     server.sendContent(html);
-    html = "";
+    html = "";  // keeps the reserved memory
   };
   html += FPSTR(PAGE_HEAD);
+  flush();
 
   if (message) {
     html += F("<div class=\"msg ");
@@ -354,6 +359,7 @@ static void sendPage(const char* message = nullptr, bool isError = false)
             "<a href=\"https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv\" target=\"_blank\">list</a>)</label>"
             "<input name=\"tz\" required maxlength=\"63\" value=\"");
   html += htmlEscape(s.timezone);
+  flush();
   html += F("\"><h2>WiFi</h2>"
             "<label>Network name (if it can't be joined, the clock opens its own access point \"" DEVICE_HOSTNAME "\")</label>"
             "<input name=\"ssid\" required maxlength=\"32\" value=\"");
@@ -599,9 +605,17 @@ static void handleApiVolume()
 // ---- Station editor ----------------------------------------------------------------
 static void sendStationsPage(const char* message = nullptr, bool isError = false)
 {
+  // Sent in chunks like the main page
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
   String html;
-  html.reserve(4000);
+  html.reserve(PAGE_CHUNK);
+  auto flush = [&] {
+    server.sendContent(html);
+    html = "";
+  };
   html += FPSTR(PAGE_HEAD);
+  flush();
   html += F("<h2>Radio stations</h2>");
   if (message) {
     html += F("<div class=\"msg ");
@@ -627,7 +641,9 @@ static void sendStationsPage(const char* message = nullptr, bool isError = false
     html += F("\" maxlength=\"127\" placeholder=\"http://...\" style=\"margin-top:4px\" value=\"");
     html += htmlEscape(st.url);
     html += F("\">");
+    if (html.length() > PAGE_CHUNK / 2) flush();
   }
+  flush();
   // Autoplay at boot
   const RadioAutoplay ap = radioAutoplay();
   html += F("<h2>At startup</h2>"
@@ -647,7 +663,9 @@ static void sendStationsPage(const char* message = nullptr, bool isError = false
     html += F(": ");
     html += htmlEscape(st.url[0] ? (st.name[0] ? st.name : "Station") : "(empty)");
     html += F("</option>");
+    if (html.length() > PAGE_CHUNK / 2) flush();
   }
+  flush();
   html += F("</select>"
             "<label>Volume fade-in (seconds, 0 = off)</label>"
             "<input name=\"autofd\" type=\"number\" min=\"0\" max=\"60\" value=\"");
@@ -657,7 +675,8 @@ static void sendStationsPage(const char* message = nullptr, bool isError = false
             "rises from silence to the set volume over this time, up to 60 s.</p>"
             "<button class=\"save\" type=\"submit\">Save</button></form>"
             "<p><a href=\"/\">Back</a></p></body></html>");
-  server.send(200, "text/html", html);
+  flush();
+  server.sendContent("");  // end of chunked response
 }
 
 static void handleStationsSave()

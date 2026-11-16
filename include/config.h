@@ -88,22 +88,24 @@
 #ifndef CVBS_MEMORY_HEIGHT
 #define CVBS_MEMORY_HEIGHT    260
 #endif
-// Visible area inside the frame buffer and its offset (shrink/move to fight overscan)
+// Drawn area and its offset inside the picture (shrink/move to fight overscan). RAM is
+// only used for this area (1 byte per pixel, 73 KB), what is outside is black for free.
 #ifndef CVBS_PANEL_WIDTH
-#define CVBS_PANEL_WIDTH      330
+#define CVBS_PANEL_WIDTH      314
 #endif
 #ifndef CVBS_PANEL_HEIGHT
-#define CVBS_PANEL_HEIGHT     250
+#define CVBS_PANEL_HEIGHT     234
 #endif
 #ifndef CVBS_OFFSET_X
-#define CVBS_OFFSET_X         5
+#define CVBS_OFFSET_X         13
 #endif
 #ifndef CVBS_OFFSET_Y
-#define CVBS_OFFSET_Y         5
+#define CVBS_OFFSET_Y         13
 #endif
-// Additional safe margin in pixels around the drawn content
+// Additional black margin in pixels inside the drawn area. Costs RAM for nothing:
+// prefer a smaller panel + bigger offset
 #ifndef SCREEN_MARGIN
-#define SCREEN_MARGIN         8
+#define SCREEN_MARGIN         0
 #endif
 #ifndef CVBS_OUTPUT_LEVEL
 #define CVBS_OUTPUT_LEVEL     128   // Raise if the picture is dark (e.g. series resistor)
@@ -111,13 +113,13 @@
 #ifndef CVBS_CHROMA_LEVEL
 #define CVBS_CHROMA_LEVEL     128   // 0 = black & white, higher = more saturated
 #endif
-// 8 = RGB332 (88 KB frame buffer, known working), 16 = RGB565 (176 KB, nicer
+// 8 = RGB332 (73 KB frame buffer, known working), 16 = RGB565 (147 KB, nicer
 // gradients but very tight on RAM next to WiFi; not recommended without PSRAM)
 #ifndef CVBS_COLOR_DEPTH
 #define CVBS_COLOR_DEPTH      8
 #endif
 // 1 = grayscale for black & white TVs: 256 gray levels and no color information in
-// the picture (no dot patterns from the color carrier). Same 82 KB frame buffer as
+// the picture (no dot patterns from the color carrier). Same 73 KB frame buffer as
 // 8-bit color; the library has no 4-bit mode for composite output.
 #ifndef CVBS_GRAYSCALE
 #define CVBS_GRAYSCALE        0
@@ -170,10 +172,10 @@
 #error "AUDIO_PWM_PIN must not be the video pin"
 #endif
 // DAC/PWM: samples buffered between the decoder and the sample-rate timer interrupt
-// (power of 2; 1024 = 23 ms at 44.1 kHz like the I2S DMA buffers; 1 KB of RAM with the
+// (power of 2; 2048 = 46 ms at 44.1 kHz like the I2S DMA buffers; 1 KB per 1024 with the
 // DAC, 2 KB with PWM). Network hiccups are bridged by RADIO_BUFFER_BYTES, not by this.
 #ifndef AUDIO_RING_SAMPLES
-#define AUDIO_RING_SAMPLES    1024
+#define AUDIO_RING_SAMPLES    2048
 #endif
 
 // --- Web radio (PCM5102 or other I2S DAC on the ESP32's second I2S port) ------
@@ -188,6 +190,13 @@
 #ifndef I2S_DOUT_PIN
 #define I2S_DOUT_PIN          2    // PCM5102 DIN
 #endif
+// Sound buffered in the I2S driver, in blocks of 128 samples (2.9 ms at 44.1 kHz, 512
+// bytes of RAM each). It has to bridge the time the decoder is held up, or the sound
+// stutters: about 10 ms normally, 30-60 ms (measured) while a web page is being served.
+// 16 = 46 ms / 8 KB. The same role as AUDIO_RING_SAMPLES for the DAC / PWM outputs.
+#ifndef AUDIO_I2S_DMA_BUFFERS
+#define AUDIO_I2S_DMA_BUFFERS 16
+#endif
 // GPIO wired to the PCM5102's SCK (system clock) input, driven LOW so the DAC uses its
 // internal PLL (clock derived from BCK). A floating SCK makes the DAC drop out
 // intermittently. -1 = not connected (SCK grounded or the module's SCK bridge closed).
@@ -195,10 +204,12 @@
 #ifndef I2S_SCK_LOW_PIN
 #define I2S_SCK_LOW_PIN       16
 #endif
-// Network buffer in front of the MP3 decoder (bridges WiFi hiccups; ~0.5 s at 128 kbit/s).
-// Reserved permanently at boot together with the ~30 KB decoder state.
+// Network buffer in front of the MP3 decoder (bridges WiFi hiccups; ~0.25 s at 128 kbit/s,
+// on top of the ~5 KB the TCP stack holds). Reserved permanently at boot together with the
+// ~30 KB decoder state. Raise it (8192) for a weak WiFi signal if RAM allows: the heap log
+// (DEBUG_HEAP_LOG_S) counts how often it ran empty.
 #ifndef RADIO_BUFFER_BYTES
-#define RADIO_BUFFER_BYTES    8192
+#define RADIO_BUFFER_BYTES    4096
 #endif
 #ifndef RADIO_MAX_STATIONS
 #define RADIO_MAX_STATIONS    8
