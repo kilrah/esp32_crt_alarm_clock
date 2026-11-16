@@ -241,3 +241,34 @@ installed, and after one `pio run` so the library is downloaded:
 sh tools/preview/build.sh                  # images in tools/preview/out
 sh tools/preview/build.sh -DCLOCK_24H=0    # any config.h option can be overridden
 ```
+
+## License
+[MIT](LICENSE). Third-party components, downloaded by PlatformIO at build time (the fonts
+are included):
+
+| Component | Use | License |
+|---|---|---|
+| [ESP8266Audio](https://github.com/earlephilhower/ESP8266Audio) (with libmad) | MP3 decoding, stream handling | GPL-3.0-or-later |
+| [LovyanGFX](https://github.com/lovyan03/LovyanGFX) | Composite video output, drawing | MIT and BSD-2-Clause |
+| [ArduinoJson](https://github.com/bblanchon/ArduinoJson) | Home Assistant responses | MIT |
+| [Arduino core for the ESP32](https://github.com/espressif/arduino-esp32) / ESP-IDF | Framework | LGPL-2.1 / Apache-2.0 |
+| Helvetica bitmap fonts in `include/fonts.h` (from the X11 distribution, in [U8g2](https://github.com/olikraus/u8g2) format) | Text on the TV | Adobe / DEC notice below |
+
+Font notice:
+
+> Copyright (c) 1984, 1987 Adobe Systems Incorporated. All Rights Reserved.
+> Copyright (c) 1988, 1991 Digital Equipment Corporation. All Rights Reserved.
+>
+> Adobe is a trademark of Adobe Systems Incorporated which may be registered in certain
+> jurisdictions. Permission to use these trademarks is hereby granted only in association with
+> the images described in this file.
+>
+> Permission to use, copy, modify, distribute and sell this software and its documentation for
+> any purpose and without fee is hereby granted, provided that the above copyright notices
+> appear in all copies and that both those copyright notices and this permission notice appear
+> in supporting documentation, and that the names of Adobe Systems and Digital Equipment
+> Corporation not be used in advertising or publicity pertaining to distribution of the software
+> without specific, written prior permission.
+>
+> Adobe Systems and Digital Equipment Corporation make no representations about the suitability
+> of this software for any purpose. It is provided "as is" without express or implied warranty.
