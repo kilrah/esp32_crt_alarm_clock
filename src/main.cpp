@@ -229,7 +229,8 @@ void loop()
 
   // Long song titles scroll: faster loop for smooth movement (~30 px/s)
   const bool scrolling = ui.animateNowPlaying(millis());
-  uint32_t wait = scrolling ? 20 : 50;
+  const bool iconMoving = ui.animateIcon(weather, t, millis());
+  uint32_t wait = (scrolling || iconMoving) ? 20 : 50;
 #if CLOCK_SECONDS
   // Wake just after the next full second, so the seconds tick evenly
   timeval tv;

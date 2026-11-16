@@ -21,6 +21,8 @@ drawing code, using the 8-bit frame buffer format the ESP32 uses.)*
   range bar; today's row shows a marker at the current temperature
 - Day/night icons via `sun.sun`
 - Weather icons drawn with vector primitives, so no bitmaps
+- Animated large icon: turning sun rays, drifting clouds, falling rain/snow/hail, flashing lightning
+  (`ICON_ANIMATION`, `ICON_ANIM_FPS` in `include/config.h`)
 - Built-in settings page at http://weatherclock.local/ that is always available: WiFi, Home Assistant and
   timezone can be changed without rebooting. If the WiFi can't be joined, the clock opens its own access point
   with a captive portal

@@ -61,6 +61,12 @@
 #ifndef SHOW_DECIMAL
 #define SHOW_DECIMAL          0     // Show current temperature with one decimal
 #endif
+#ifndef ICON_ANIMATION
+#define ICON_ANIMATION        1     // Animate the large weather icon (turning sun, falling rain...)
+#endif
+#ifndef ICON_ANIM_FPS
+#define ICON_ANIM_FPS         12    // Frames per second of that animation
+#endif
 #ifndef WEATHER_REFRESH_S
 #define WEATHER_REFRESH_S     300   // How often to poll Home Assistant
 #endif

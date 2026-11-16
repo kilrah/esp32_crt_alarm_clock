@@ -29,6 +29,11 @@ class WeatherUi {
   // redraws the line when the scroll position moved. Returns true while scrolling.
   bool animateNowPlaying(uint32_t ms);
 
+  // Animates the large weather icon (ICON_ANIMATION in config.h). Call often with a
+  // millisecond clock while the weather screen is shown; redraws only the icon, at
+  // ICON_ANIM_FPS. Returns true while animating.
+  bool animateIcon(const WeatherData& w, time_t nowUtc, uint32_t ms);
+
   // Second line shown under the error when there is no weather data (e.g. where
   // the settings page is). Empty string = none.
   void setHint(const char* hint) { snprintf(_hint, sizeof(_hint), "%s", hint ? hint : ""); }
@@ -52,6 +57,9 @@ class WeatherUi {
   void drawTempBar(lgfx::LovyanGFX* g, int x, int y, int w, int h, float gMin, float gMax, float lo, float hi,
                    float marker);
   void drawNowPlaying(lgfx::LovyanGFX* g, int ox, int oy);
+  // Left column of the header: large icon + "outdated" dot (background already cleared)
+  void drawIconColumn(lgfx::LovyanGFX* g, int ox, int oy, const WeatherData& w, time_t nowUtc);
+  int iconSize() const { return _headerH < 84 ? _headerH : 84; }
   void pushBand(int x, int y, int w, int h);
 
   static constexpr int BAND_H = 30;         // off-screen strip height (= max row height)
@@ -76,4 +84,7 @@ class WeatherUi {
   int _scrollX = 0;          // current offset in pixels
   uint32_t _scrollT0 = 0;    // start of the current pass (incl. pause)
   bool _scrollRestart = true;
+  // Large icon animation
+  int32_t _iconMs = -1;      // animation clock of the frame on screen, -1 = static
+  uint32_t _iconLast = 0;    // when that frame was drawn
 };

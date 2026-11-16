@@ -171,6 +171,40 @@ int main(int argc, char** argv)
     snprintf(path, sizeof(path), "%s/icons.ppm", outDir);
     writePpm(sheet, path, 3);
   }
+  // 4b) Animation frames of the large icon: one row per condition, 250 ms apart
+  {
+    const char* all[] = {"sunny", "clear-night", "partlycloudy", "cloudy", "fog", "rainy", "pouring", "snowy",
+                         "snowy-rainy", "hail", "lightning", "lightning-rainy", "windy", "windy-variant"};
+    const int n = sizeof(all) / sizeof(all[0]), frames = 8, cell = 88;
+    lgfx::LGFX_Sprite sheet;
+    sheet.setColorDepth(screen.getColorDepth());
+    sheet.createSprite(frames * cell, n * cell);
+    sheet.fillScreen(0);
+    for (int i = 0; i < n; ++i)
+      for (int f = 0; f < frames; ++f)
+        drawWeatherIcon(&sheet, f * cell + 2, i * cell + 2, 84, all[i], false, 0, f * 250);
+    snprintf(path, sizeof(path), "%s/icons_anim.ppm", outDir);
+    writePpm(sheet, path, 1);
+  }
+  // 4c) The header's icon column redrawn by animateIcon() over a rendered screen
+  {
+    WeatherData w;
+    w.valid = true;
+    strcpy(w.condition, "rainy");
+    w.temperature = 12.7f;
+    w.humidity = 93;
+    w.sunUp = 1;
+    w.lastUpdate = now - 3600;  // stale: the dot must survive the icon redraw
+    const char* conds[] = {"rainy", "cloudy", "sunny"};
+    const float temps[][2] = {{5, 9}, {2, 7}, {-2, 6}};
+    addDaily(w, now, conds, temps, 3);
+    ui.render(w, now, true);
+    ui.animateIcon(w, now, 1234);
+    ui.renderHeader(w, now, true);  // must show the same frame
+    ui.animateIcon(w, now, 1500);
+    snprintf(path, sizeof(path), "%s/screen_anim.ppm", outDir);
+    writePpm(screen, path, 3);
+  }
   // 5) Boot message
   {
     // Same text as showSetupScreen() in main.cpp

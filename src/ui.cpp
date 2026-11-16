@@ -264,7 +264,7 @@ void WeatherUi::drawHeader(LovyanGFX* g, int ox, int oy, const WeatherData& w, t
   if (w.valid && !std::isnan(w.humidity)) snprintf(hum, sizeof(hum), "%d%%", (int)lroundf(w.humidity));
 #endif
 
-  const int iconS = H < 84 ? H : 84;
+  const int iconS = iconSize();
   const int gapV = 6;
   const int tx = ox + iconS + 8;
 
@@ -378,9 +378,7 @@ void WeatherUi::drawHeader(LovyanGFX* g, int ox, int oy, const WeatherData& w, t
 
   // ---- Left block: icon, condition, temperature ------------------------------
   const bool stale = !w.valid || (w.lastUpdate > 0 && nowUtc - w.lastUpdate > STALE_AFTER_S);
-  const int iconY = oy + (H - iconS) / 2;
-  if (w.valid) drawWeatherIcon(g, ox, iconY, iconS, w.condition, isNight(w, nowUtc), C_BG);
-  else drawWeatherIcon(g, ox, iconY, iconS, "exceptional", false, C_BG);
+  drawIconColumn(g, ox, oy, w, nowUtc);
 
   const int lineGap = 5;
   int tempBase;
@@ -424,9 +422,47 @@ void WeatherUi::drawHeader(LovyanGFX* g, int ox, int oy, const WeatherData& w, t
     g->setTextColor(C_DIM);
     g->drawString(hum, hx + dropS + 1, hBase);
   }
+}
+
+void WeatherUi::drawIconColumn(LovyanGFX* g, int ox, int oy, const WeatherData& w, time_t nowUtc)
+{
+  const int H = _headerH, iconS = iconSize();
+  const int iconY = oy + (H - iconS) / 2;
+  // Moving parts must not leave traces outside the column that animateIcon() redraws
+  int cx, cy, cw, ch;
+  g->getClipRect(&cx, &cy, &cw, &ch);
+  g->setClipRect(ox, oy, iconS, H);
+  if (w.valid) drawWeatherIcon(g, ox, iconY, iconS, w.condition, isNight(w, nowUtc), C_BG, _iconMs);
+  else drawWeatherIcon(g, ox, iconY, iconS, "exceptional", false, C_BG);
 
   // Outdated data / error indicator
+  const bool stale = w.lastUpdate > 0 && nowUtc - w.lastUpdate > STALE_AFTER_S;
   if (stale && w.valid) g->fillCircle(ox + 4, oy + 4, 4, C_WARN);
+  g->setClipRect(cx, cy, cw, ch);
+}
+
+bool WeatherUi::animateIcon(const WeatherData& w, time_t nowUtc, uint32_t ms)
+{
+#if ICON_ANIMATION
+  // Needs the off-screen strip (clearing on screen would flicker)
+  if (!_band || !w.valid) {
+    _iconMs = -1;
+    return false;
+  }
+  if (_iconMs >= 0 && ms - _iconLast < 1000u / ICON_ANIM_FPS) return true;
+  _iconLast = ms;
+  _iconMs = (int32_t)(ms & 0x7FFFFFFF);
+
+  const int cw = iconSize(), bh = _band->height();
+  for (int y0 = 0; y0 < _headerH; y0 += bh) {
+    _band->fillRect(0, 0, cw, bh, C_BG);
+    drawIconColumn(_band, 0, -y0, w, nowUtc);
+    pushBand(_x, _y + y0, cw, _headerH - y0 < bh ? _headerH - y0 : bh);
+  }
+  return true;
+#else
+  return false;
+#endif
 }
 
 void WeatherUi::renderForecast(const WeatherData& w, time_t nowUtc)
