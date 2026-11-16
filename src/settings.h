@@ -11,6 +11,8 @@ struct Settings {
   char haUrl[128];     // e.g. http://homeassistant.local:8123 (no trailing slash)
   char haToken[256];   // never sent to the web page or printed
   char entity[64];     // e.g. weather.forecast_home
+  char tempEntity[64]; // e.g. sensor.balcony_temperature; empty = temperature of the weather entity
+  char humEntity[64];  // same for the humidity, e.g. sensor.balcony_humidity
   char timezone[64];   // POSIX TZ string
 };
 
@@ -26,4 +28,5 @@ const char* validateWifiPass(const String& pass);
 const char* validateHaUrl(const String& url);
 const char* validateHaToken(const String& token);
 const char* validateEntity(const String& entity);
+const char* validateSensorEntity(const String& entity);  // temperature / humidity entity; empty is allowed
 const char* validateTimezone(const String& tz);

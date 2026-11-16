@@ -71,6 +71,23 @@ float jsonFloat(JsonVariantConst v)
   return NAN;
 }
 
+// Reads the state of `entity` as a number into `value`. If that fails, `value` is left
+// alone (the weather entity's value stays).
+void readNumericState(const HaConfig& cfg, const String& entity, float& value)
+{
+  HaRequest req(cfg);
+  const int code = req.get("/api/states/" + entity);
+  float v = NAN;
+  if (code == 200) {
+    JsonDocument filter;
+    filter["state"] = true;
+    JsonDocument doc;
+    if (!deserializeJson(doc, req.stream(), DeserializationOption::Filter(filter))) v = jsonFloat(doc["state"]);
+  }
+  if (!isnan(v)) value = v;
+  else Serial.printf("[HA] %s not readable (HTTP %d or no number), using the weather entity's value\n", entity.c_str(), code);
+}
+
 }  // namespace
 
 bool haUpdateWeather(const HaConfig& cfg, bool hourly, WeatherData& w)
@@ -109,6 +126,11 @@ bool haUpdateWeather(const HaConfig& cfg, bool hourly, WeatherData& w)
     const char* unit = doc["attributes"]["temperature_unit"] | "\xC2\xB0" "C";
     strlcpy(nw.unit, unit, sizeof(nw.unit));
   }
+
+  // ---- Current temperature / humidity from other entities (optional) ----------
+  // The temperature is assumed to be in the weather entity's unit (the forecast uses that one)
+  if (!cfg.tempEntity.isEmpty()) readNumericState(cfg, cfg.tempEntity, nw.temperature);
+  if (!cfg.humEntity.isEmpty()) readNumericState(cfg, cfg.humEntity, nw.humidity);
 
   // ---- Forecast (weather.get_forecasts service, HA 2024.3+) -----------------
   {

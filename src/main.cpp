@@ -43,7 +43,7 @@ static void showSetupScreen(const NetStatus& net)
 static bool fetchWeather()
 {
   const Settings s = settingsGet();
-  HaConfig cfg{s.haUrl, s.haToken, s.entity};
+  HaConfig cfg{s.haUrl, s.haToken, s.entity, s.tempEntity, s.humEntity};
   bool ok = haUpdateWeather(cfg, FORECAST_HOURLY, weather);
   webUiSetWeatherStatus(weather.lastUpdate, weather.error);
   return ok;

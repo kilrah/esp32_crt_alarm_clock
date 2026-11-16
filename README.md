@@ -106,6 +106,10 @@ shown on the TV when there is no weather data). The page has these settings:
   works but the certificate isn't checked and it needs ~40 KB more RAM)
 - Long-lived access token (write-only: leave the field empty to keep the stored one)
 - Weather entity
+- Optional: other entities for the current temperature and humidity, e.g.
+  `sensor.balcony_temperature` / `sensor.balcony_humidity` (your own outdoor sensor instead of
+  the forecast provider's values; the temperature must be in the same unit as the weather
+  entity. If one can't be read, the weather entity's value is shown)
 - POSIX timezone (default is Central Europe: `CET-1CEST,M3.5.0,M10.5.0/3`,
   [list of zones](https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv))
 - WiFi network and password (the password is write-only too)

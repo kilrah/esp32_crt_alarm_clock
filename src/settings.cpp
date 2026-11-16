@@ -30,9 +30,10 @@ static void apply(const Settings& s)
 
 static void print(const char* what, const Settings& s)
 {
-  Serial.printf("[Settings] %s: WiFi \"%s\"%s, HA %s, entity %s, token %s, TZ %s\n", what, s.wifiSsid,
-                s.wifiPass[0] ? "" : " (open)", s.haUrl, s.entity, s.haToken[0] ? "set" : "(none)",
-                s.timezone);
+  Serial.printf("[Settings] %s: WiFi \"%s\"%s, HA %s, entity %s, temperature %s, humidity %s, token %s, TZ %s\n",
+                what, s.wifiSsid, s.wifiPass[0] ? "" : " (open)", s.haUrl, s.entity,
+                s.tempEntity[0] ? s.tempEntity : "(weather entity)", s.humEntity[0] ? s.humEntity : "(weather entity)",
+                s.haToken[0] ? "set" : "(none)", s.timezone);
 }
 
 // Copies a stored string into `dst` if it passes `validate`
@@ -54,6 +55,8 @@ void settingsBegin()
     loadString(p, "url", s.haUrl, sizeof(s.haUrl), validateHaUrl);
     loadString(p, "token", s.haToken, sizeof(s.haToken), validateHaToken);
     loadString(p, "entity", s.entity, sizeof(s.entity), validateEntity);
+    loadString(p, "tempent", s.tempEntity, sizeof(s.tempEntity), validateSensorEntity);
+    loadString(p, "hument", s.humEntity, sizeof(s.humEntity), validateSensorEntity);
     loadString(p, "tz", s.timezone, sizeof(s.timezone), validateTimezone);
     p.end();
   }
@@ -82,6 +85,8 @@ void settingsSave(const Settings& s)
     p.putString("url", s.haUrl);
     p.putString("token", s.haToken);
     p.putString("entity", s.entity);
+    p.putString("tempent", s.tempEntity);
+    p.putString("hument", s.humEntity);
     p.putString("tz", s.timezone);
     p.end();
   }
@@ -156,6 +161,22 @@ const char* validateEntity(const String& entity)
     char c = entity[i];
     if (!islower((unsigned char)c) && !isdigit((unsigned char)c) && c != '_')
       return "Weather entity may only contain a-z, 0-9 and _ after \"weather.\"";
+  }
+  return nullptr;
+}
+
+const char* validateSensorEntity(const String& entity)
+{
+  if (!entity.length()) return nullptr;  // not used
+  if (entity.length() >= sizeof(Settings::tempEntity)) return "Temperature / humidity entity is too long";
+  // domain.object_id, e.g. sensor.balcony_temperature
+  const int dot = entity.indexOf('.');
+  if (dot < 1 || dot == (int)entity.length() - 1 || entity.indexOf('.', dot + 1) >= 0)
+    return "Temperature / humidity entity must look like sensor.balcony_temperature (or be empty)";
+  for (size_t i = 0; i < entity.length(); ++i) {
+    char c = entity[i];
+    if (!islower((unsigned char)c) && !isdigit((unsigned char)c) && c != '_' && c != '.')
+      return "Temperature / humidity entity may only contain a-z, 0-9, _ and one dot";
   }
   return nullptr;
 }

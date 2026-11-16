@@ -355,6 +355,12 @@ static void sendPage(const char* message = nullptr, bool isError = false)
   html += F("\"><label>Weather entity</label>"
             "<input name=\"entity\" required maxlength=\"63\" placeholder=\"weather.forecast_home\" value=\"");
   html += htmlEscape(s.entity);
+  html += F("\"><label>Current temperature from another entity (optional, same unit; empty = weather entity)</label>"
+            "<input name=\"tempent\" maxlength=\"63\" placeholder=\"sensor.balcony_temperature\" value=\"");
+  html += htmlEscape(s.tempEntity);
+  html += F("\"><label>Humidity from another entity (optional; empty = weather entity)</label>"
+            "<input name=\"hument\" maxlength=\"63\" placeholder=\"sensor.balcony_humidity\" value=\"");
+  html += htmlEscape(s.humEntity);
   html += F("\"><label>Timezone (POSIX TZ string, "
             "<a href=\"https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv\" target=\"_blank\">list</a>)</label>"
             "<input name=\"tz\" required maxlength=\"63\" value=\"");
@@ -470,6 +476,12 @@ static void handleSave()
   String entity = server.arg("entity");
   entity.trim();
   entity.toLowerCase();
+  String tempEntity = server.arg("tempent");
+  tempEntity.trim();
+  tempEntity.toLowerCase();
+  String humEntity = server.arg("hument");
+  humEntity.trim();
+  humEntity.toLowerCase();
   String tz = server.arg("tz");
   tz.trim();
   String ssid = server.arg("ssid");  // not trimmed: spaces are valid in an SSID
@@ -480,6 +492,8 @@ static void handleSave()
   const char* err = validateHaUrl(url);
   if (!err) err = validateHaToken(token);
   if (!err) err = validateEntity(entity);
+  if (!err) err = validateSensorEntity(tempEntity);
+  if (!err) err = validateSensorEntity(humEntity);
   if (!err) err = validateTimezone(tz);
   if (!err) err = validateWifiSsid(ssid);
   if (!err) err = validateWifiPass(pass);
@@ -492,6 +506,8 @@ static void handleSave()
   strlcpy(s.haUrl, url.c_str(), sizeof(s.haUrl));
   strlcpy(s.haToken, token.c_str(), sizeof(s.haToken));
   strlcpy(s.entity, entity.c_str(), sizeof(s.entity));
+  strlcpy(s.tempEntity, tempEntity.c_str(), sizeof(s.tempEntity));
+  strlcpy(s.humEntity, humEntity.c_str(), sizeof(s.humEntity));
   strlcpy(s.timezone, tz.c_str(), sizeof(s.timezone));
   strlcpy(s.wifiSsid, ssid.c_str(), sizeof(s.wifiSsid));
   strlcpy(s.wifiPass, pass.c_str(), sizeof(s.wifiPass));
