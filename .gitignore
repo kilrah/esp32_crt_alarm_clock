@@ -8,3 +8,4 @@
 tools/preview/build/
 tools/preview/out/
 secrets.ini
+data/alarm.mp3

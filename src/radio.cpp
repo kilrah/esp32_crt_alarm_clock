@@ -5,7 +5,9 @@
 #include <Preferences.h>
 #include <AudioFileSourceICYStream.h>
 #include <AudioFileSourceBuffer.h>
+#include <AudioFileSourceFS.h>
 #include <AudioGeneratorMP3.h>
+#include <LittleFS.h>
 #if AUDIO_OUTPUT == AUDIO_OUT_I2S
 #include <AudioOutputI2S.h>
 #include <driver/i2s.h>
@@ -45,6 +47,8 @@ struct Cmd {
   uint8_t volume;
   char name[32];
   char url[128];
+  bool fromBoot;  // Play: the backup alarm delay counts from power-up, not from now
+  uint8_t fadeS;  // Play: fade in over this many seconds, 0 = full volume at once
 };
 QueueHandle_t queue;
 
@@ -65,7 +69,57 @@ void updateStatus(F f)
 // ---- Stations (web task and loop) -------------------------------------------------
 SemaphoreHandle_t stationsMutex;
 Station stations[RADIO_MAX_STATIONS];
-RadioAutoplay autoplay{false, 0};  // guarded by stationsMutex too
+RadioAutoplay autoplay{false, 0, 0};  // guarded by stationsMutex too
+
+// ---- Fade-in (audio task only) -----------------------------------------------------
+// Samples are scaled by fadeQ / FADE_FULL before the volume is applied. Done on the
+// samples because the library's volume has only 64 steps: far too coarse for a slow
+// fade at a low volume setting.
+constexpr int32_t FADE_FULL = 1 << 15;
+int32_t fadeQ = FADE_FULL;
+uint32_t fadeMs = 0;        // duration
+uint32_t fadeStart = 0;     // 0 = not running
+bool fadeArmed = false;     // starts with the first sound (stream or backup alarm)
+
+inline int16_t faded(int16_t s) { return (int16_t)((s * fadeQ) >> 15); }
+
+void fadeCancel()
+{
+  fadeArmed = false;
+  fadeStart = 0;
+  fadeQ = FADE_FULL;
+}
+
+void fadeArm(uint32_t seconds)
+{
+  fadeCancel();
+  if (!seconds) return;
+  fadeMs = seconds * 1000;
+  fadeArmed = true;
+  fadeQ = 0;
+}
+
+// Sound is starting: an armed fade begins now (a running one just continues, e.g. when
+// the stream takes over from the backup alarm)
+void fadeOnSound()
+{
+  if (!fadeArmed) return;
+  fadeArmed = false;
+  fadeStart = millis() | 1;
+}
+
+void fadeUpdate()
+{
+  if (!fadeStart) return;
+  const uint32_t e = millis() - fadeStart;
+  if (e >= fadeMs) {
+    fadeCancel();
+    return;
+  }
+  // Squared like the volume setting: loudness then rises about evenly
+  const float f = (float)e / fadeMs;
+  fadeQ = (int32_t)(f * f * FADE_FULL);
+}
 
 #if AUDIO_OUTPUT == AUDIO_OUT_I2S
 // The legacy ESP-IDF I2S driver powers down the ESP32's built-in DAC whenever an I2S
@@ -79,6 +133,12 @@ class PersistentI2S : public AudioOutputI2S {
   {
     if (i2sOn) i2s_zero_dma_buffer((i2s_port_t)portNo);
     return true;
+  }
+  bool ConsumeSample(int16_t sample[2]) override
+  {
+    if (fadeQ == FADE_FULL) return AudioOutputI2S::ConsumeSample(sample);
+    int16_t s[2] = {faded(sample[0]), faded(sample[1])};
+    return AudioOutputI2S::ConsumeSample(s);
   }
 };
 using RadioOutput = PersistentI2S;
@@ -230,6 +290,10 @@ class SampleOutput : public AudioOutput {
 
     int16_t s[2] = {sample[0], sample[1]};
     MakeSampleStereo16(s);
+    if (fadeQ != FADE_FULL) {
+      s[0] = faded(s[0]);
+      s[1] = faded(s[1]);
+    }
     const int32_t mono = ((int32_t)Amplify(s[0]) + Amplify(s[1])) / 2;
     // Scale to output levels (16.16 fixed point) with first-order noise shaping: the
     // quantization error is fed into the next sample, which moves the noise of the
@@ -288,6 +352,11 @@ char wantUrl[128] = "";
 uint32_t retryAt = 0;
 int retryCount = 0;
 uint32_t volumeSaveAt = 0;   // 0 = nothing pending
+// Backup alarm sound (RADIO_BACKUP_AFTER_S)
+AudioFileSourceFS* backupFile = nullptr;  // != nullptr while the sound is playing
+uint32_t backupSize = 0;     // size of the file found at boot, 0 = none
+uint32_t silentSince = 0;    // when the wanted stream went missing
+bool backupActive = false;   // the stream has been missing for too long: fill the gaps with the sound
 
 // ICY titles are usually UTF-8 but some stations send Latin-1: convert those
 void toUtf8(const char* in, char* out, size_t size)
@@ -351,6 +420,8 @@ void stopStream()
   buff = nullptr;
   delete file;
   file = nullptr;
+  delete backupFile;
+  backupFile = nullptr;
 }
 
 void scheduleRetry(const char* error)
@@ -367,9 +438,48 @@ void scheduleRetry(const char* error)
   Serial.printf("[Radio] %s, retrying in %u s\n", error, (unsigned)(d / 1000));
 }
 
+// True once the wanted stream has been missing for RADIO_BACKUP_AFTER_S (stays true
+// until the stream plays or the radio is stopped)
+bool backupDue()
+{
+#if RADIO_BACKUP_AFTER_S > 0
+  if (!backupActive && backupSize && millis() - silentSince >= RADIO_BACKUP_AFTER_S * 1000UL) {
+    backupActive = true;
+    Serial.println("[Radio] No stream, switching to the backup alarm sound");
+  }
+#endif
+  return backupActive;
+}
+
+// Plays the alarm sound from flash once (the audio task restarts it or retries the
+// stream when it ends). The status keeps the stream's error.
+void startBackup()
+{
+  stopStream();
+  backupFile = new AudioFileSourceFS(LittleFS, RADIO_BACKUP_FILE);
+  mp3 = new AudioGeneratorMP3(mp3Space, AudioGeneratorMP3::preAllocSize());
+  if (!backupFile->isOpen() || !mp3->begin(backupFile, out)) {
+    stopStream();
+    backupActive = false;
+    backupSize = 0;  // don't try again
+    updateStatus([](RadioStatus& s) { s.state = RadioState::Retrying; });
+    Serial.println("[Radio] Backup alarm sound could not be played");
+    return;
+  }
+  fadeOnSound();
+  updateStatus([](RadioStatus& s) {
+    s.state = RadioState::Backup;
+    s.title[0] = 0;
+  });
+}
+
 void startStream()
 {
   stopStream();
+  if (!wantUrl[0]) {
+    scheduleRetry("Station is empty");
+    return;
+  }
   if (WiFi.status() != WL_CONNECTED) {
     scheduleRetry("No WiFi connection");
     return;
@@ -408,6 +518,8 @@ void startStream()
     return;
   }
   retryCount = 0;
+  backupActive = false;
+  fadeOnSound();
   updateStatus([](RadioStatus& s) {
     s.state = RadioState::Playing;
     s.error[0] = 0;
@@ -422,6 +534,9 @@ void handleCmd(const Cmd& c)
       wantPlay = true;
       strlcpy(wantUrl, c.url, sizeof(wantUrl));
       retryCount = 0;
+      silentSince = c.fromBoot ? 0 : millis();
+      backupActive = false;
+      fadeArm(c.fadeS);
       updateStatus([&](RadioStatus& s) {
         s.station = c.station;
         strlcpy(s.name, c.name, sizeof(s.name));
@@ -431,6 +546,8 @@ void handleCmd(const Cmd& c)
       break;
     case CmdType::Stop:
       wantPlay = false;
+      backupActive = false;
+      fadeCancel();
       stopStream();
       updateStatus([](RadioStatus& s) {
         s.state = RadioState::Stopped;
@@ -461,14 +578,24 @@ void audioTask(void*)
       handleCmd(c);
       wait = 0;
     }
+    fadeUpdate();
 
     if (mp3 && mp3->isRunning()) {
       if (!mp3->loop()) {
+        const bool wasBackup = backupFile != nullptr;
         stopStream();
-        if (wantPlay) scheduleRetry("Stream interrupted");
+        if (wasBackup) {
+          // The sound has played through: restart it below, or try the stream first
+          // if a retry is due (it comes back right away if that fails)
+        } else if (wantPlay) {
+          silentSince = millis();
+          scheduleRetry("Stream interrupted");
+        }
       }
-    } else if (wantPlay && !mp3 && (int32_t)(millis() - retryAt) >= 0) {
-      startStream();
+    }
+    if (wantPlay && !mp3) {
+      if ((int32_t)(millis() - retryAt) >= 0) startStream();
+      if (!mp3 && backupDue()) startBackup();
     }
 
     if (volumeSaveAt && millis() - volumeSaveAt >= VOLUME_SAVE_DELAY_MS) {
@@ -519,6 +646,17 @@ void radioBegin()
                 (unsigned)((heapBefore - ESP.getFreeHeap()) / 1024), (unsigned)AudioGeneratorMP3::preAllocSize(),
                 (unsigned)RADIO_BUFFER_BYTES, (unsigned)(ESP.getFreeHeap() / 1024));
 
+#if RADIO_BACKUP_AFTER_S > 0
+  // Backup alarm sound in the LittleFS partition (not formatted if it isn't there)
+  if (mp3Space && LittleFS.begin(false)) {
+    File f = LittleFS.open(RADIO_BACKUP_FILE, "r");
+    if (f && !f.isDirectory()) backupSize = f.size();
+    f.close();
+  }
+  if (backupSize) Serial.printf("[Radio] Backup alarm sound: %u KB\n", (unsigned)(backupSize / 1024));
+  else Serial.println("[Radio] No backup alarm sound (" RADIO_BACKUP_FILE " not in flash, see README)");
+#endif
+
   Preferences p;
   uint8_t volume = RADIO_DEFAULT_VOLUME;
   bool initialized = false;
@@ -527,6 +665,8 @@ void radioBegin()
     autoplay.enabled = p.getBool("auto", false);
     autoplay.station = p.getUChar("autost", 0);
     if (autoplay.station >= RADIO_MAX_STATIONS) autoplay.station = 0;
+    autoplay.fadeS = p.getUChar("autofd", 0);
+    if (autoplay.fadeS > RADIO_FADE_MAX_S) autoplay.fadeS = RADIO_FADE_MAX_S;
     volume = p.getUChar("vol", RADIO_DEFAULT_VOLUME);
     for (int i = 0; i < RADIO_MAX_STATIONS; ++i) {
       char key[4];
@@ -572,10 +712,10 @@ void radioBegin()
 #endif
 }
 
-void radioPlay(int index)
+void radioPlay(int index, bool fromBoot, int fadeS)
 {
   const Station s = radioStation(index);
-  if (!s.url[0]) {
+  if (!s.url[0] && !fromBoot) {  // at power-up an empty slot still leads to the backup alarm
     char e[32];
     snprintf(e, sizeof(e), "Station %d is empty", index + 1);
     updateStatus([&](RadioStatus& st) { strlcpy(st.error, e, sizeof(st.error)); });
@@ -584,14 +724,17 @@ void radioPlay(int index)
   Cmd c{CmdType::Play, (int16_t)index, 0, "", ""};
   strlcpy(c.name, s.name[0] ? s.name : "Radio", sizeof(c.name));
   strlcpy(c.url, s.url, sizeof(c.url));
+  c.fromBoot = fromBoot;
+  c.fadeS = (uint8_t)constrain(fadeS, 0, RADIO_FADE_MAX_S);
   queueCmd(c);
 }
 
-void radioPlayUrl(const char* url, const char* name)
+void radioPlayUrl(const char* url, const char* name, int fadeS)
 {
   Cmd c{CmdType::Play, -1, 0, "", ""};
   strlcpy(c.name, name && *name ? name : "Radio", sizeof(c.name));
   strlcpy(c.url, url, sizeof(c.url));
+  c.fadeS = (uint8_t)constrain(fadeS, 0, RADIO_FADE_MAX_S);
   queueCmd(c);
 }
 
@@ -638,6 +781,7 @@ void radioSetAutoplay(const RadioAutoplay& a)
 {
   RadioAutoplay v = a;
   if (v.station < 0 || v.station >= RADIO_MAX_STATIONS) v.station = 0;
+  v.fadeS = constrain(v.fadeS, 0, RADIO_FADE_MAX_S);
   xSemaphoreTake(stationsMutex, portMAX_DELAY);
   autoplay = v;
   xSemaphoreGive(stationsMutex);
@@ -645,6 +789,7 @@ void radioSetAutoplay(const RadioAutoplay& a)
   if (p.begin(NVS_NAMESPACE, false)) {
     p.putBool("auto", v.enabled);
     p.putUChar("autost", (uint8_t)v.station);
+    p.putUChar("autofd", (uint8_t)v.fadeS);
     p.end();
   }
 }
@@ -705,6 +850,9 @@ const char* radioStateName(RadioState s)
     case RadioState::Connecting: return "connecting";
     case RadioState::Playing: return "playing";
     case RadioState::Retrying: return "retrying";
+    case RadioState::Backup: return "backup";
     default: return "stopped";
   }
 }
+
+uint32_t radioBackupSize() { return backupSize; }

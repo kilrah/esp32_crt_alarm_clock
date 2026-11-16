@@ -214,6 +214,18 @@
 #define RADIO_DEFAULT_URL     "http://icecast.radiofrance.fr/fip-midfi.mp3"
 #endif
 
+// Backup alarm: when the radio should play but there has been no stream for this many
+// seconds (no WiFi/internet, station down), an MP3 file from the flash file system is
+// played in a loop until the stream works or the radio is stopped. 0 = off.
+// The file is not part of the project: put your own data/alarm.mp3 (max ~900 KB, no
+// big ID3 tag / cover art) and upload it with `pio run -t uploadfs`.
+#ifndef RADIO_BACKUP_AFTER_S
+#define RADIO_BACKUP_AFTER_S  30
+#endif
+#ifndef RADIO_BACKUP_FILE
+#define RADIO_BACKUP_FILE     "/alarm.mp3"
+#endif
+
 // --- Network / web page -------------------------------------------------------
 // Settings page at http://<DEVICE_HOSTNAME>.local/ ; also the name of the fallback
 // access point (password = OTA_PASSWORD if it has 8+ characters, else open)

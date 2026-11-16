@@ -29,6 +29,7 @@ drawing code, using the 8-bit frame buffer format the ESP32 uses.)*
 - Firmware updates over the network (web page upload or PlatformIO OTA)
 - Web radio through a PCM5102 I2S DAC (or, at lower quality, the second internal DAC or a PWM pin): 8 station presets, volume, "now playing" on the TV,
   and an HTTP API so Home Assistant can use it as a radio alarm
+- Backup alarm sound from flash (your own MP3) when the radio stream can't be played
 - Flicker-free updates: each screen section is drawn off-screen first and then copied into the frame buffer
 - An orange dot appears in the top-left corner when the data is older than 30 min. Errors are shown on screen
 
@@ -94,6 +95,9 @@ bright, adjust `CVBS_OUTPUT_LEVEL`.
 3. Upload over USB: `pio run -t upload`. Later updates can go over WiFi:
    `pio run -e esp32dev_pal-ota -t upload`, or upload `.pio/build/esp32dev_pal/firmware.bin`
    on the page's *Firmware update* link (login `admin` / OTA password).
+   The flash layout is in `partitions.csv` (two 1.44 MB firmware slots + 1 MB file system). A
+   clock flashed before that file existed needs one more upload over USB; settings are kept.
+4. Optional: [backup alarm sound](#backup-alarm-sound), `pio run -t uploadfs`.
 
 ## Settings page
 Once the clock is on your WiFi, open **http://weatherclock.local/** (the IP address works too. It is
@@ -119,7 +123,7 @@ network every 2 minutes and closes the access point once it succeeds.
 
 ## Web radio
 The radio section on the settings page has buttons for the stations, Stop, a volume slider
-and the current title. Stations are edited on *Edit stations* (8 slots). That page also has an *At startup* option that starts a chosen station automatically after boot, once WiFi is up and the first weather update is done. While the radio
+and the current title. Stations are edited on *Edit stations* (8 slots). That page also has an *At startup* option that starts a chosen station automatically after boot (once WiFi is up and the first weather update is done, or as soon as joining the WiFi has failed), and a *Volume fade-in* of up to 60 s for it: the sound, radio or backup alarm, rises from silence to the set volume. While the radio
 plays, the TV shows the station and title at the bottom, with one forecast row fewer. A title that
 doesn't fit scrolls, pausing for 2 s at the start of each pass.
 
@@ -140,16 +144,32 @@ Limits:
   logs memory and task stack headroom to the serial port.
 - Lost streams are reconnected automatically (3 s, 10 s, 30 s, then every minute).
 
+### Backup alarm sound
+If the radio should play but there is no stream for 30 s (`RADIO_BACKUP_AFTER_S`: internet or
+station down, stream lost and not coming back), the clock plays an MP3 file from its own flash
+in a loop, so a wake-up doesn't fail silently. Each time the sound has played through, the stream
+is tried again if a retry is due; the sound ends when the stream works or the radio is stopped.
+This includes the station started by *At startup*: when the clock is powered by the TV's own
+alarm, switching on is the wake-up. The 30 s then count from power-up, and it works without any
+network: if the WiFi can't be joined (20 s), the sound starts about 30 s after power-up.
+
+The sound is not part of this project. Put your own file at `data/alarm.mp3` (git-ignored, up to
+~900 KB, without a big ID3 tag / cover art) and upload it over USB with `pio run -t uploadfs`.
+The settings page shows whether it was found.
+
+A wake-up triggered from Home Assistant (below) still needs the WiFi at alarm time for the play
+command to arrive; only the power-up autoplay works without any network.
+
 ### Radio alarm from Home Assistant
 The clock has a small HTTP API (no login, so keep it on your LAN). Station numbers are 1-8 as on *Edit stations*:
 
 | Request | Effect |
 |---|---|
-| `POST /api/radio/play?station=2` | Play station 2 (without `station`: the last one) |
+| `POST /api/radio/play?station=2` | Play station 2 (without `station`: the last one). Optional `&fade=30`: fade the volume in over 30 s (max 60) |
 | `POST /api/radio/play?url=http://...&name=Foo` | Play any http MP3 stream |
 | `POST /api/radio/stop` | Stop |
 | `POST /api/radio/volume?value=40` or `?change=-5` | Set or change the volume (0-100) |
-| `GET /api/radio` | Status as JSON: `state`, `station`, `name`, `title`, `volume`, `error` |
+| `GET /api/radio` | Status as JSON: `state` (`stopped`, `connecting`, `playing`, `retrying`, `backup`), `station`, `name`, `title`, `volume`, `error`, `backup_sound` (file present) |
 
 ```yaml
 # configuration.yaml (use the clock's IP if Home Assistant can't resolve .local names)

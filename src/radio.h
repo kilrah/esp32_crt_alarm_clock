@@ -5,12 +5,16 @@
 // (PCM5102) on I2S1, the second internal DAC or a PWM pin (AUDIO_OUTPUT). Decoding runs in its own task on core 0. All functions below
 // are thread-safe and non-blocking (commands are queued to the audio task).
 
+constexpr int RADIO_FADE_MAX_S = 60;  // longest volume fade-in
+
 struct Station {
   char name[32];
   char url[128];  // "" = empty slot
 };
 
-enum class RadioState : uint8_t { Stopped, Connecting, Playing, Retrying };
+// Backup = no stream for RADIO_BACKUP_AFTER_S: the alarm sound from flash is playing
+// (the stream is still retried, each time the sound has played through)
+enum class RadioState : uint8_t { Stopped, Connecting, Playing, Retrying, Backup };
 
 struct RadioStatus {
   RadioState state;
@@ -23,8 +27,13 @@ struct RadioStatus {
 
 void radioBegin();  // load stations + volume from NVS, start the audio task
 
-void radioPlay(int station);                      // play from the station list
-void radioPlayUrl(const char* url, const char* name);
+// Play from the station list. If there is no stream for RADIO_BACKUP_AFTER_S, the alarm
+// sound from flash plays instead (a wake-up must not fail silently). fromBoot = count
+// that time from power-up instead of from this call (autoplay: the power-up is the alarm).
+// fadeS = fade the volume in from silence over this many seconds (0-RADIO_FADE_MAX_S),
+// starting with the first sound; it ends at the set volume.
+void radioPlay(int station, bool fromBoot = false, int fadeS = 0);
+void radioPlayUrl(const char* url, const char* name, int fadeS = 0);
 void radioStop();
 void radioSetVolume(int volume);                  // 0-100, persisted
 
@@ -34,10 +43,12 @@ uint32_t radioStatusVersion();  // increments whenever the status changes (lock-
 // (internal DAC / PWM output only, 0 with I2S)
 uint32_t radioUnderruns();
 
-// Autoplay: start a preset automatically once WiFi is up after boot (persisted)
+// Autoplay: start a preset automatically after boot (persisted). Works without WiFi too:
+// the backup alarm sound plays then.
 struct RadioAutoplay {
   bool enabled;
   int station;  // 0-based preset index
+  int fadeS;    // volume fade-in in seconds, 0 = none
 };
 RadioAutoplay radioAutoplay();
 void radioSetAutoplay(const RadioAutoplay& a);
@@ -47,4 +58,6 @@ void radioSetStation(int index, const Station& s);  // persist one slot
 const char* validateStation(const Station& s);      // nullptr if OK
 
 const char* radioOutputName();  // compiled-in audio output (AUDIO_OUTPUT), for display
-const char* radioStateName(RadioState s);  // "stopped", "connecting", "playing", "retrying"
+const char* radioStateName(RadioState s);  // "stopped", "connecting", "playing", "retrying", "backup"
+// Size in bytes of the backup alarm sound found in flash at boot, 0 = none (or disabled)
+uint32_t radioBackupSize();

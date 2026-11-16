@@ -78,6 +78,7 @@ static bool updateNowPlaying()
   const bool show = r.state != RadioState::Stopped;
   const char* title = r.state == RadioState::Connecting ? "Connecting..."
                     : r.state == RadioState::Retrying   ? "Reconnecting..."
+                    : r.state == RadioState::Backup     ? "No stream - backup alarm"
                                                         : r.title;
   const bool wasShown = ui.nowPlayingShown();
   ui.setNowPlaying(show ? r.name : "", title);
@@ -148,6 +149,20 @@ void loop()
 
   const NetStatus net = webUiNetStatus();
 
+  // Autoplay once per boot. The clock may be switched on by the TV's own alarm, so this
+  // must make a sound whatever the network does: with WiFi, after the first weather fetch
+  // (not in parallel with it - RAM is tight); without, as soon as joining has failed. The
+  // radio falls back to the backup alarm sound if no stream plays (time counted from boot).
+  static bool autoplayDone = false;
+  if (!autoplayDone && ((net.state == NetState::Joined && !fetchDue) || net.state == NetState::OwnAp)) {
+    autoplayDone = true;
+    const RadioAutoplay ap = radioAutoplay();
+    if (ap.enabled) {
+      Serial.printf("[Radio] Autoplay station %d\n", ap.station + 1);
+      radioPlay(ap.station, true, ap.fadeS);
+    }
+  }
+
   // Own access point: show how to reach the setup page
   if (net.state == NetState::OwnAp) {
     if (screen != Screen::Setup || net.ip != shownIp) {
@@ -188,18 +203,6 @@ void loop()
     lastFetch = millis();
     lastFetchOk = fetchWeather();
     full = true;
-  }
-
-  // Autoplay once per boot: after WiFi is up and the first weather fetch is done
-  // (not in parallel with it - RAM is tight)
-  static bool autoplayDone = false;
-  if (!autoplayDone && net.state == NetState::Joined && !fetchDue) {
-    autoplayDone = true;
-    const RadioAutoplay ap = radioAutoplay();
-    if (ap.enabled) {
-      Serial.printf("[Radio] Autoplay station %d\n", ap.station + 1);
-      radioPlay(ap.station);
-    }
   }
 
   time_t t = time(nullptr);

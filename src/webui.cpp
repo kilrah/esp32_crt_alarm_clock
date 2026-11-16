@@ -267,6 +267,11 @@ static String radioStatusHtml()
       html += htmlEscape(r.name);
       html += F("</b>: reconnecting&hellip;");
       break;
+    case RadioState::Backup:
+      html += F("<b>");
+      html += htmlEscape(r.name);
+      html += F("</b>: no stream, playing the backup alarm sound");
+      break;
     default:
       html += F("Stopped");
   }
@@ -390,6 +395,17 @@ static void sendPage(const char* message = nullptr, bool isError = false)
   }
   html += F("<br>Hostname: " DEVICE_HOSTNAME ".local<br>Audio output: ");
   html += radioOutputName();
+#if RADIO_BACKUP_AFTER_S > 0
+  html += F("<br>Backup alarm sound: ");
+  if (radioBackupSize()) {
+    html += radioBackupSize() / 1024;
+    html += F(" KB, after ");
+    html += RADIO_BACKUP_AFTER_S;
+    html += F(" s without stream");
+  } else {
+    html += F("<span class=\"warn\">none (" RADIO_BACKUP_FILE " not uploaded)</span>");
+  }
+#endif
   html += F("<br>Weather: ");
   if (lastOk > 0) {
     char buf[32];
@@ -536,6 +552,8 @@ static void sendRadioJson(int code = 200, const char* error = nullptr)
   json += radioOutputName();
   json += F("\",\"underruns\":");
   json += radioUnderruns();
+  json += F(",\"backup_sound\":");
+  json += radioBackupSize() ? F("true") : F("false");
   json += F("}");
   server.sendHeader("Cache-Control", "no-store");
   server.send(code, "application/json", json);
@@ -551,13 +569,13 @@ static void handleApiPlay()
     strlcpy(st.name, server.arg("name").c_str(), sizeof(st.name));
     if (const char* err = validateStation(st)) return sendRadioJson(400, err);
     if (!st.url[0]) return sendRadioJson(400, "url is empty");
-    radioPlayUrl(st.url, st.name);
+    radioPlayUrl(st.url, st.name, server.arg("fade").toInt());
   } else {
     // station=N (1-based); without it the last played station (or the first one)
     int idx = server.hasArg("station") ? server.arg("station").toInt() - 1 : radioStatus().station;
     if (idx < 0) idx = 0;
     if (idx >= RADIO_MAX_STATIONS || !radioStation(idx).url[0]) return sendRadioJson(400, "No such station");
-    radioPlay(idx);
+    radioPlay(idx, false, server.arg("fade").toInt());  // optional fade=seconds
   }
   sendRadioJson();
 }
@@ -631,6 +649,12 @@ static void sendStationsPage(const char* message = nullptr, bool isError = false
     html += F("</option>");
   }
   html += F("</select>"
+            "<label>Volume fade-in (seconds, 0 = off)</label>"
+            "<input name=\"autofd\" type=\"number\" min=\"0\" max=\"60\" value=\"");
+  html += ap.fadeS;
+  html += F("\">"
+            "<p class=\"info\" style=\"margin-top:4px\">The startup station (or the backup alarm sound) "
+            "rises from silence to the set volume over this time, up to 60 s.</p>"
             "<button class=\"save\" type=\"submit\">Save</button></form>"
             "<p><a href=\"/\">Back</a></p></body></html>");
   server.send(200, "text/html", html);
@@ -651,7 +675,9 @@ static void handleStationsSave()
       return sendStationsPage(msg.c_str(), true);
     }
   }
-  RadioAutoplay ap{server.hasArg("auto"), (int)server.arg("autost").toInt()};  // checkbox sent only when checked
+  // checkbox sent only when checked
+  RadioAutoplay ap{server.hasArg("auto"), (int)server.arg("autost").toInt(),
+                   constrain((int)server.arg("autofd").toInt(), 0, RADIO_FADE_MAX_S)};
   if (ap.station < 0 || ap.station >= RADIO_MAX_STATIONS) ap.station = 0;
   if (ap.enabled && !list[ap.station].url[0]) {
     String msg = String("Autoplay: station ") + (ap.station + 1) + " has no URL";
@@ -662,7 +688,7 @@ static void handleStationsSave()
     if (strcmp(old.name, list[i].name) || strcmp(old.url, list[i].url)) radioSetStation(i, list[i]);
   }
   const RadioAutoplay oldAp = radioAutoplay();
-  if (oldAp.enabled != ap.enabled || oldAp.station != ap.station) radioSetAutoplay(ap);
+  if (oldAp.enabled != ap.enabled || oldAp.station != ap.station || oldAp.fadeS != ap.fadeS) radioSetAutoplay(ap);
   sendStationsPage("Saved.");
 }
 
